@@ -101,10 +101,10 @@ class FrankaReacherEnv(gym.Env):
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(20,), dtype=np.float32)
 
         self.targets = [
-            [0.696, -0.129, 0.153],
-            [0.489, -0.123, 0.153],
-            [0.730, 0.167, 0.153],
-            [0.484, 0.178, 0.153]
+            [0.631, -0.102, 0.16],
+            [0.432, -0.123, 0.16],
+            [0.665, 0.120, 0.16], 
+            [0.440, 0.173, 0.16] 
         ]
 
         self.episode_target = self.targets[0]
