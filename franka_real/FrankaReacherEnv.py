@@ -96,15 +96,15 @@ class FrankaReacherEnv(gym.Env):
 
         self.joint_action_limit = 0.3
 
-        joint_velocity_limits = np.array([2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61])
+        joint_velocity_limits = np.array([1.0, 1.0, 1.0, 1.0, 1.5, 1.5, 1.5])
         self.action_space = spaces.Box(low=-joint_velocity_limits, high=joint_velocity_limits, dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(20,), dtype=np.float32)
 
         self.targets = [
-            [0.696, -0.129, 0.16], 
-            [0.489, -0.123, 0.16],
-            [0.730, 0.167, 0.16],
-            [0.484, 0.178, 0.16]
+            [0.696, -0.129, 0.2], 
+            [0.489, -0.123, 0.2],
+            [0.730, 0.167, 0.2],
+            [0.484, 0.178, 0.2]
         ]
 
         self.episode_target = self.targets[0]
@@ -277,8 +277,6 @@ class FrankaReacherEnv(gym.Env):
         
         # limit joint action
         action = action.reshape(-1)
-        # action = np.clip(action, -1*ARM_VEL_LIMITS, ARM_VEL_LIMITS)
-        # action = (((action + 1) * 0.5) * ARM_VEL_LIMITS * 2) - ARM_VEL_LIMITS
 
         # # convert joint velocities to pose velocities
         pose_action = np.matmul(self.get_robot_jacobian(), action[:7])
@@ -368,52 +366,6 @@ class FrankaReacherEnv(gym.Env):
                 action[i] = +0.5
         return action
 
-    def get_timeout_reward(self):
-        if self.time_out_reward:
-            reward = -1
-            print('call time out reward {:+.3f}'.format(reward))
-            return reward
-        else:
-            return 0
-
-    def move_to_pose_ee(self, ref_ee_pos, pose_vel_limit=0.2):
-        counter = 0
-        # print('11111', rospy.Time.now())
-        
-        while True:
-            self.robot_status.enable()
-            # print(self.robot_status.state())
-            counter += 1
-            #action = agent.act(observations['ee_states'], ref_ee_pos, self.get_robot_jacobian(), add_noise=False)
-            self.get_state()
-            action = np.zeros((4,))
-            action[:3] = ref_ee_pos-self.ee_position
-            action[-1] = 1
-
-            if max(np.abs(action[:3])) < 0.005 or counter > 100:
-                break
-
-
-            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
-
-            # calculate joint actions
-            d_angle =  np.array(self.euler_from_quaternion(self.reset_ee_quaternion)) - np.array(self.euler_from_quaternion(self.ee_orientation))
-            for i in range(3):
-                if d_angle[i] < -np.pi:
-                    d_angle[i] += 2*np.pi
-                elif d_angle[i] > np.pi:
-                    d_angle[i] -= 2*np.pi
-            d_angle *= 0.5
-            #print('d_angle', d_angle)
-            d_X = np.array([pose_action[0], pose_action[1], pose_action[2], d_angle[0],d_angle[1],d_angle[2]])
-            joints_action = self.get_joint_vel_from_pos_vel(d_X)
-            # print('joints_action', joints_action)
-            self.apply_joint_vel(joints_action)
-            
-            # action cycle time
-            self.rate.sleep()
-        self.apply_joint_vel(np.zeros((7,)))
-
     def get_joint_vel_from_pos_vel(self, pose_vel):
         return np.matmul(np.linalg.pinv( self.get_robot_jacobian() ), pose_vel)
 
@@ -447,6 +399,7 @@ class FrankaReacherEnv(gym.Env):
         cv2.destroyAllWindows()
 
         self.apply_joint_vel(np.zeros((7,)))
+        self.terminate()
     
     def exit_handler(self,signum):
         exit(signum)
@@ -470,47 +423,11 @@ class FrankaReacherEnv(gym.Env):
         target = np.array([0.7, 0.2, 0.3])
         return np.linalg.norm(target - robotic_arm_pointer)
     
-    def _get_tf_mat(self, i, dh):
-        a = dh[i][0]
-        d = dh[i][1]
-        alpha = dh[i][2]
-        theta = dh[i][3]
-        q = theta
-
-        return np.array([[np.cos(q), -np.sin(q), 0, a],
-                        [np.sin(q) * np.cos(alpha), np.cos(q) * np.cos(alpha), -np.sin(alpha), -np.sin(alpha) * d],
-                        [np.sin(q) * np.sin(alpha), np.cos(q) * np.sin(alpha), np.cos(alpha), np.cos(alpha) * d],
-                        [0, 0, 0, 1]])
-
     def _get_end_effector_pos(self, joint_angles):
 
         ee_pose = self.robot.endpoint_pose()
         return ee_pose['position']
     
-    def _quaternion_to_rotation_matrix(self, quat):
-        """
-        Converts a quaternion [qx, qy, qz, qw] to a 3x3 rotation matrix.
-        """
-        qx, qy, qz, qw = quat
-        R = np.array([
-            [1 - 2*qy**2 - 2*qz**2, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
-            [2*qx*qy + 2*qz*qw, 1 - 2*qx**2 - 2*qz**2, 2*qy*qz - 2*qx*qw],
-            [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx**2 - 2*qy**2]
-        ])
-        return R
-    
-    def _get_end_effector_transformation(self):
-        # End-effector position and quaternion from XML
-        position = np.array([0, 0, 0.1034])  # Position from XML
-        quat = [0.707, 0, 0.707, 0]          # Quaternion from XML
-        rotation_matrix = self._quaternion_to_rotation_matrix(quat)
-
-        # Construct the 4x4 transformation matrix
-        T_end_effector = np.eye(4)
-        T_end_effector[:3, :3] = rotation_matrix
-        T_end_effector[:3, 3] = position
-        return T_end_effector
-
 
 if __name__ == "__main__":
     env = FrankaReacherEnv()

@@ -14,7 +14,7 @@ experiment:
 
 environment:
   reward_func: default
-  safe-bound-box: [[ 0.2, 0.8 ], [ -0.45, 0.45 ], [ 0.15 , 0.8 ]]  # x, y, z
+  safe-bound-box: [[ 0.2, 0.8 ], [ -0.45, 0.45 ], [ 0.1 , 0.8 ]]  # x, y, z
   target-box: [[ 0.3, 0.8 ], [ -0.3, 0.3 ], [ 0.1, .2 ]]
   reset-bound: [ [0.0, 0.0], [0.245, 0.255], [0.0, 0.0], [-1.2, -1.4], [-0.0, 0.0], [1.3,1.5], [0.5, 0.9] ]  # from j1 to j7
   # position: [-0.0, 0.025, 0.075, -1.35, -0.017, 1.41, 0.8477]
@@ -26,7 +26,7 @@ environment:
   image-height: 240
   visualization: False
   terminal-reward-classifier: False
-  joint-angle-bound: [[-2.8, 2.8], [-1.7, 1.7], [-2.8, 2.8], [-3.0, -0.1], [-2.8, 2.8], [-0.01, 3.7], [-2.8, 2.8]] # for all 7 joints
+  joint-angle-bound: [[-2.8973, 2.8973], [-1.7628, 1.7628], [-2.8973, 2.8973], [-3.0718, -0.0698], [-2.8973, 2.8973], [-0.0175, 3.7525], [-2.8973, 2.8973]] # for all 7 joints
   return-point: [-0.0, 0.025, 0.075, -1.35, -0.017, 1.5, 0.8477]
   
   
