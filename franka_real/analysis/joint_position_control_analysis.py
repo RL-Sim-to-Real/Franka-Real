@@ -34,14 +34,17 @@ import signal
 import multiprocessing
 from gymnasium.spaces import Box as GymBox
 
-import mujoco
-import mujoco.viewer
+import pandas as pd
+import yaml
+from datetime import datetime
+
+
 
 ARM_VEL_LIMITS = np.array([2.61799, 2.61799, 2.61799, 2.61799, 3.14159, 3.14159, 3.14159, 0])
 
 
 
-class FrankaReacherEnv(gym.Env):
+class FrankaPositionController(gym.Env):
     # pass
     """
     Gym env for the real franka robot. Set up to perform the placement of a peg that starts in the robots hand into a slot
@@ -53,18 +56,13 @@ class FrankaReacherEnv(gym.Env):
         self.ep_time = 0
         self.max_episode_duration = episode_length # in seconds
         signal.signal(signal.SIGINT, self.exit_handler)
-        # config_file = os.path.join(os.path.dirname(__file__), os.pardir, 'reacher.yaml')
+
+        rospy.init_node("franka_robot_gym")
+
         self.configs = configure('/home/chemist/Desktop/CoRL-2025/Franka-Real/franka_real/reacher.yaml')
         self.conf_exp = self.configs['experiment']
         self.conf_env = self.configs['environment']
-        rospy.init_node("franka_robot_gym")
-        self.init_joints_bound = self.conf_env['reset-bound']
-        #self.target_joints = self.conf_env['target-bound']
-        self.safe_bound_box = np.array(self.conf_env['safe-bound-box'])
-        self.target_box = np.array(self.conf_env['target-box'])
         self.joint_angle_bound = np.array(self.conf_env['joint-angle-bound'])
-        self.return_point = self.conf_env['return-point']
-        self.out_of_boundary_flag = False
         self.joint_names = ['panda_joint1', 'panda_joint2', 'panda_joint3', 'panda_joint4', 'panda_joint5', 'panda_joint6', 'panda_joint7']
 
         self.robot = ArmInterface(True)
@@ -100,40 +98,9 @@ class FrankaReacherEnv(gym.Env):
         self.action_space = spaces.Box(low=-joint_velocity_limits, high=joint_velocity_limits, dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(20,), dtype=np.float32)
 
-        self.targets = [
-            [0.696, -0.129, 0.2], 
-            [0.489, -0.123, 0.2],
-            [0.730, 0.167, 0.2],
-            [0.484, 0.178, 0.2]
-        ]
-
-        self.episode_target = self.targets[0]
-        self.total_timesteps = 0
-        # TODO: Try 40 ms action cycle time with 2 ms actuation cycle time
-        # TODO: Get joint velocities and plot them
 
 
-    def _reset_stats(self):
-        self.reward_sum = 0.0
-        self.episode_length = 0
-        self.start_time = time.time()
 
-    def monitor(self, reward, done, info):
-        self.reward_sum += reward
-        self.episode_length += 1
-        self.total_timesteps += 1
-        info['total'] = {'timesteps': self.total_timesteps}
-
-        if done:
-            info['episode'] = {}
-            info['episode']['return'] = self.reward_sum
-            info['episode']['length'] = self.episode_length
-            info['episode']['duration'] = time.time() - self.start_time
-
-            if hasattr(self, 'get_normalized_score'):
-                info['episode']['return'] = self.get_normalized_score(
-                    info['episode']['return']) * 100.0
-        return info
         
     def reset(self):
         """
@@ -143,15 +110,13 @@ class FrankaReacherEnv(gym.Env):
         object
             Observation of the current state of this env in the format described by this envs observation_space.
         """
-        self.episode_target = self.targets[np.random.randint(0, len(self.targets))]
-        self.time_steps = 0
-        self.ep_time = 0
+
         self.robot_status.enable()
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
         # close the gripper
         self.close_gripper()
-        self._reset_stats()
+
 
 
         target_pose = [0.0, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04]
@@ -159,39 +124,18 @@ class FrankaReacherEnv(gym.Env):
 
         self.reset_ee_quaternion = [0,-1.,0,0]
         
-        obs = self.get_state()
-
-
         self.out_of_boundary_flag = False
 
-
-
-
         smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
-        # print("here", self.robot.endpoint_pose()["orientation"])
         
-
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
 
         # get the observation
         obs_robot = self.get_state()
         qpos = obs_robot["joints"].copy()
-        qvel = obs_robot['joint_vels'].copy()
-
-        obs = self._get_obs(qpos, qvel)
-
-        self.time_steps = 0
-
-        self.tv = time.time()
-        self.reset_time = time.time()
-
-        self.cur_step = 0 
-
-        self._reset_stats()
-
         
-        return obs.copy(), {}
+        return qpos
 
 
     def get_robot_jacobian(self):
@@ -327,34 +271,8 @@ class FrankaReacherEnv(gym.Env):
         qpos = observation_robot["joints"].copy()
         qvel = observation_robot["joint_vels"].copy()
 
-        # construct the state
-        obs = self._get_obs(qpos, qvel)
-        prop = obs.copy()
-        done = 0
-        info = {}
+        print(qpos)
 
-        truncated = False
-        if self.ep_time >= (self.max_episode_duration-1e-3):
-            done = True
-            info['TimeLimit.truncated'] = True
-            truncated = True
-
-        if done:
-            self.apply_joint_vel(np.zeros((7,)))
-
-        reward = self._compute_reward(self._compute_distance(observation_robot["joints"]), action)
-        info = self.monitor(reward, done, info)
-
-        return  prop, reward, False, truncated, info
-
-    def _get_obs(self, joint_pos, joint_vels):
-
-        robotic_arm_pointer = self._get_end_effector_pos(joint_angles=joint_pos)
-        target = self.episode_target
-        return np.concatenate([joint_pos, joint_vels, robotic_arm_pointer, target])
-
-    def _compute_reward(self, distance, action):
-        return -distance - 0.01 * np.linalg.norm(action)
 
 
     def handle_joint_angle_in_bound(self, action):
@@ -401,7 +319,7 @@ class FrankaReacherEnv(gym.Env):
         cv2.destroyAllWindows()
 
         self.apply_joint_vel(np.zeros((7,)))
-        self.terminate()
+        # self.terminate()
     
     def exit_handler(self,signum):
         exit(signum)
@@ -432,5 +350,68 @@ class FrankaReacherEnv(gym.Env):
     
 
 if __name__ == "__main__":
-    env = FrankaReacherEnv()
-    env.reset()
+    robot = FrankaPositionController()
+    print(robot.reset())
+    # robot.open_gripper()
+    # robot.close_gripper()
+    time.sleep(0.2)
+    robot.reset()
+    time.sleep(0.2)
+    robot.robot.set_joint_position_speed(1.0) # use max speed allowed
+
+    # Load the YAML configuration file
+    with open('./config.yml', 'r') as file:
+        config = yaml.safe_load(file)
+    
+    mode_of_control = config['control_mode']
+    joint_to_displace = config['joint_to_displace']
+    joint_to_displace = f"panda_joint{joint_to_displace}"
+    amount_to_displace_radians = config['displacement_radians']
+    threshold = config['threshold']
+    num_steps = config['steps']
+    current_positions = []
+    target_positions = []
+    action_times = []
+    print(f"Mode of control: {mode_of_control}")
+    print(f"Joint to displace: {joint_to_displace}")
+    print(f"Amount to displace in radians: {amount_to_displace_radians}")
+    print(f"Number of steps: {num_steps}")
+    for _ in range(num_steps):
+        current_position = robot.get_state()["joints"]
+        target_position = current_position.copy()
+        joint_index = robot.joint_names.index(joint_to_displace)
+        # target_position[joint_index] += amount_to_displace_radians
+        target_position = np.array([0.2, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04])
+        # target_position += amount_to_displace_radians
+        current_positions.append(current_position[joint_index])
+        target_positions.append(target_position[joint_index])
+        print(f"Current position: {current_position}")
+        print(f"Target position: {target_position}")
+        start = time.time()
+        if mode_of_control == 0:
+            robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=True)
+        elif mode_of_control == 1:
+            robot.robot_status.enable()
+            robot.robot.set_joint_positions(dict(zip(robot.joint_names, target_position)))
+            time.sleep(config['cycle_time'])
+        elif mode_of_control == 2:
+            robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=False)
+        end = time.time()
+
+        action_times.append(end - start)
+        print(f"Time taken to move joint {joint_to_displace} by {amount_to_displace_radians} radians: {end - start} seconds")
+
+    time.sleep(1.0)
+    robot.reset()
+    data = {
+        "current_positions": current_positions,
+        "target_positions": target_positions,
+        "action_times": action_times
+    }
+    df = pd.DataFrame(data)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    df.to_csv(f"position_analysis-joint{joint_to_displace}-{timestamp}.csv", index=False)
+
+    # time.sleep(0.5)
+    robot.terminate()   
+
