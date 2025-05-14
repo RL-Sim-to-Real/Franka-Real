@@ -33,14 +33,27 @@ import time
 import signal
 import multiprocessing
 from gymnasium.spaces import Box as GymBox
+from scipy.spatial.transform import Rotation as R
+import quaternion
 
 
 ARM_VEL_LIMITS = np.array([2.61799, 2.61799, 2.61799, 2.61799, 3.14159, 3.14159, 3.14159, 0])
 
+## Store EE orientation in quaternion format
 
+EE_ORI = [
+    0.99741769, -0.07031947,  0.01392346,
+   -0.06985664, -0.99705542, -0.03132564,
+    0.01608557,  0.03027268, -0.99941224
+]
 
-class FrankaReacherEnv(gym.Env):
-    # pass
+R_matrix = np.array(EE_ORI).reshape((3, 3))
+rotation = R.from_matrix(R_matrix)
+quat = rotation.as_quat()
+
+EE_ORI = quaternion.quaternion(quat[3], quat[0], quat[1], quat[2])
+
+class FrankaPickCubeCartesian(gym.Env):
     """
     Gym env for the real franka robot. Set up to perform the placement of a peg that starts in the robots hand into a slot
     """
@@ -150,7 +163,7 @@ class FrankaReacherEnv(gym.Env):
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
         # close the gripper
-        self.close_gripper()
+        self.open_gripper()
         self._reset_stats()
 
 
@@ -272,80 +285,17 @@ class FrankaReacherEnv(gym.Env):
         self.robot.set_joint_velocities(joint_vels)        
         return True
 
-    def step(self, action, pose_vel_limit=0.3):
+    def step(self, action):
         self.ep_time += self.dt
         self.cur_step += 1
         self.robot_status.enable()
+        ee_pose = self.robot.endpoint_pose()
+        print('ee_pose', ee_pose)
+        self.move_to_pose_ee(action[:3])
         
         # limit joint action
         action = action.reshape(-1)
 
-        # # convert joint velocities to pose velocities
-        pose_action = np.matmul(self.get_robot_jacobian(), action[:7])
-
-        # limit action
-        pose_action[:3] = np.clip(pose_action[:3], -pose_vel_limit, pose_vel_limit)
-
-        # # safety
-        out_boundary = self.out_of_boundaries()
-        pose_action[:3] = self.safe_actions(pose_action[:3])
-
-        # calculate joint actions
-        d_angle =  np.array(self.euler_from_quaternion(self.reset_ee_quaternion)) - np.array(self.euler_from_quaternion(self.ee_orientation))
-        for i in range(3):
-            if d_angle[i] < -np.pi:
-                d_angle[i] += 2*np.pi
-            elif d_angle[i] > np.pi:
-                d_angle[i] -= 2*np.pi
-
-        d_X = pose_action
-        
-        # if out_boundary:
-        #     d_X[3:] = 0
-        #     action = self.get_joint_vel_from_pos_vel(d_X)
-
-        action = self.handle_joint_angle_in_bound(action)
-    
-        self.apply_joint_vel(action)
-        self.prev_action = action
-
-
-        # pass time step duration
-
-        done = False
-        
-        delay = (self.ep_time + self.reset_time) - time.time()
-        if delay > 0:
-            time.sleep(np.float64(delay))
-
-        # get next observation
-        observation_robot = self.get_state()
-
-        self.time_steps += 1
-
-        ## Sync with simulator
-        qpos = observation_robot["joints"].copy()
-        qvel = observation_robot["joint_vels"].copy()
-
-        # construct the state
-        obs = self._get_obs(qpos, qvel)
-        prop = obs.copy()
-        done = 0
-        info = {}
-
-        truncated = False
-        if self.ep_time >= (self.max_episode_duration-1e-3):
-            done = True
-            info['TimeLimit.truncated'] = True
-            truncated = True
-
-        if done:
-            self.apply_joint_vel(np.zeros((7,)))
-
-        reward = self._compute_reward(self._compute_distance(observation_robot["joints"]), action)
-        info = self.monitor(reward, done, info)
-
-        return  prop, reward, False, truncated, info
 
     def _get_obs(self, joint_pos, joint_vels):
 
@@ -416,6 +366,8 @@ class FrankaReacherEnv(gym.Env):
 
     def open_gripper(self):
         return self.gripper.open()
+    def grasp_object(self):
+        return self.gripper.grasp(0.03, 5)
 
     def close_gripper(self):
         return self.gripper.close()
@@ -429,8 +381,60 @@ class FrankaReacherEnv(gym.Env):
 
         ee_pose = self.robot.endpoint_pose()
         return ee_pose['position']
+    def move_to_pose_ee(self, ref_ee_pos, pose_vel_limit=0.2):
+        counter = 0
+        # print('11111', rospy.Time.now())
+        
+        while True:
+            self.robot_status.enable()
+            # print(self.robot_status.state())
+            counter += 1
+            #action = agent.act(observations['ee_states'], ref_ee_pos, self.get_robot_jacobian(), add_noise=False)
+            self.get_state()
+            action = np.zeros((4,))
+            action[:3] = ref_ee_pos-self.ee_position
+            action[-1] = 1
+            
+            #if max(np.abs(action[:3])) < 0.005 or 
+            #print(action)
+            if max(np.abs(action[:3])) < 0.005 or counter > 100:
+                break
+
+            #self.step(action, ignore_safety=True)
+            # limit action
+            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
+
+            # calculate joint actions
+            d_angle =  np.array(self.euler_from_quaternion(self.reset_ee_quaternion)) - np.array(self.euler_from_quaternion(self.ee_orientation))
+            for i in range(3):
+                if d_angle[i] < -np.pi:
+                    d_angle[i] += 2*np.pi
+                elif d_angle[i] > np.pi:
+                    d_angle[i] -= 2*np.pi
+            d_angle *= 0.5
+            #print('d_angle', d_angle)
+            d_X = np.array([pose_action[0], pose_action[1], pose_action[2], d_angle[0],d_angle[1],d_angle[2]])
+            joints_action = self.get_joint_vel_from_pos_vel(d_X)
+            # print('joints_action', joints_action)
+            self.apply_joint_vel(joints_action)
+            
+            # action cycle time
+            self.rate.sleep()
+        self.apply_joint_vel(np.zeros((7,)))
+
     
 
+## TEST REALTIME environment
 if __name__ == "__main__":
-    env = FrankaReacherEnv()
+    env = FrankaPickCubeCartesian()
     env.reset()
+    time.sleep(1)
+    env.step(np.array([0.5841, 0.1739899, 0.04118339]))
+    time.sleep(0.02)
+    env.grasp_object()
+    env.step(np.array([0.5841, 0.1739899, 0.15118339]))
+    env.step(np.array([0.5841, -0.1,  0.15118339]))
+    env.step(np.array([0.5841, -0.1, 0.0411]))
+    env.open_gripper()
+    env.reset()
+
