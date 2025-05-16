@@ -387,9 +387,9 @@ class FrankaPickCubeCartesian(gym.Env):
         
         while True:
             self.robot_status.enable()
-            # print(self.robot_status.state())
+            
             counter += 1
-            #action = agent.act(observations['ee_states'], ref_ee_pos, self.get_robot_jacobian(), add_noise=False)
+            
             self.get_state()
             action = np.zeros((4,))
             action[:3] = ref_ee_pos-self.ee_position
@@ -429,12 +429,10 @@ if __name__ == "__main__":
     env = FrankaPickCubeCartesian()
     env.reset()
     time.sleep(1)
-    env.step(np.array([0.5841, 0.1739899, 0.04118339]))
+    env.step(np.array([0.58, 0., 0.04118339]))
     time.sleep(0.02)
     env.grasp_object()
-    env.step(np.array([0.5841, 0.1739899, 0.15118339]))
-    env.step(np.array([0.5841, -0.1,  0.15118339]))
-    env.step(np.array([0.5841, -0.1, 0.0411]))
+    env.step(np.array([0.58, 0., 0.15118339]))
     env.open_gripper()
     env.reset()
 
