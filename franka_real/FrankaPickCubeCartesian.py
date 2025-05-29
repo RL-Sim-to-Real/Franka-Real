@@ -35,6 +35,7 @@ import multiprocessing
 from gymnasium.spaces import Box as GymBox
 from scipy.spatial.transform import Rotation as R
 import quaternion
+import subprocess
 
 
 ARM_VEL_LIMITS = np.array([2.61799, 2.61799, 2.61799, 2.61799, 3.14159, 3.14159, 3.14159, 0])
@@ -122,8 +123,30 @@ class FrankaPickCubeCartesian(gym.Env):
 
         self.episode_target = self.targets[0]
         self.total_timesteps = 0
-        # TODO: Try 40 ms action cycle time with 2 ms actuation cycle time
-        # TODO: Get joint velocities and plot them
+
+        ## configure camera
+
+        device = "/dev/video6"
+
+        controls = {
+            "brightness": -15,
+            "contrast": 14,
+            "saturation": 100,
+            "white_balance_temperature_auto": 1,
+            "gamma": 115,
+            "power_line_frequency": 2,
+            "sharpness": 2,
+            "backlight_compensation": 1,
+            "exposure_auto": 1,
+            "exposure_absolute": 1694,
+            "focus_absolute": 169,
+            "focus_auto": 0,
+        }
+
+        for key, value in controls.items():
+            subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
+        
+        self.cap = cv2.VideoCapture(camera_index)
 
 
     def _reset_stats(self):
@@ -163,7 +186,8 @@ class FrankaPickCubeCartesian(gym.Env):
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
         # close the gripper
-        self.open_gripper()
+        # self.close_gripper()
+        # self.open_gripper()
         self._reset_stats()
 
 
@@ -172,27 +196,14 @@ class FrankaPickCubeCartesian(gym.Env):
 
         self.reset_ee_quaternion = [0,-1.,0,0]
         
-        obs = self.get_state()
-
-
         self.out_of_boundary_flag = False
-
-
-
 
         smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
         # print("here", self.robot.endpoint_pose()["orientation"])
-        
+        self.move_to_pose_ee(np.array([0.57, 0.0, 0.2]))
 
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
-
-        # get the observation
-        obs_robot = self.get_state()
-        qpos = obs_robot["joints"].copy()
-        qvel = obs_robot['joint_vels'].copy()
-
-        obs = self._get_obs(qpos, qvel)
 
         self.time_steps = 0
 
@@ -202,9 +213,9 @@ class FrankaPickCubeCartesian(gym.Env):
         self.cur_step = 0 
 
         self._reset_stats()
-
+    
         
-        return obs.copy(), {}
+        return self._capture_img(), self._get_end_effector_pos(), {}
 
 
     def get_robot_jacobian(self):
@@ -289,17 +300,26 @@ class FrankaPickCubeCartesian(gym.Env):
         self.ep_time += self.dt
         self.cur_step += 1
         self.robot_status.enable()
-        ee_pose = self.robot.endpoint_pose()
-        print('ee_pose', ee_pose)
+        
         self.move_to_pose_ee(action[:3])
         
-        # limit joint action
-        action = action.reshape(-1)
+        return self._capture_img(), self._get_end_effector_pos()
 
+
+    def _capture_img(self):
+        self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
+        ret, frame = self.cap.read()
+        if not ret:
+            raise RuntimeError("Failed to capture image from camera.")
+
+        frame = cv2.resize(frame, (64, 64))
+        # print(frame.shape)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
+        return frame       
 
     def _get_obs(self, joint_pos, joint_vels):
 
-        robotic_arm_pointer = self._get_end_effector_pos(joint_angles=joint_pos)
+        robotic_arm_pointer = self._get_end_effector_pos()
         target = self.episode_target
         return np.concatenate([joint_pos, joint_vels, robotic_arm_pointer, target])
 
@@ -367,17 +387,17 @@ class FrankaPickCubeCartesian(gym.Env):
     def open_gripper(self):
         return self.gripper.open()
     def grasp_object(self):
-        return self.gripper.grasp(0.03, 5)
+        return self.gripper.grasp(0.2, 5)
 
     def close_gripper(self):
         return self.gripper.close()
 
     def _compute_distance(self, joint_angles):
-        robotic_arm_pointer = self._get_end_effector_pos(joint_angles)
+        robotic_arm_pointer = self._get_end_effector_pos()
         target = np.array([0.7, 0.2, 0.3])
         return np.linalg.norm(target - robotic_arm_pointer)
     
-    def _get_end_effector_pos(self, joint_angles):
+    def _get_end_effector_pos(self):
 
         ee_pose = self.robot.endpoint_pose()
         return ee_pose['position']
@@ -426,13 +446,22 @@ class FrankaPickCubeCartesian(gym.Env):
 
 ## TEST REALTIME environment
 if __name__ == "__main__":
-    env = FrankaPickCubeCartesian()
+    env = FrankaPickCubeCartesian(camera_index=6)
     env.reset()
-    time.sleep(1)
-    env.step(np.array([0.58, 0., 0.04118339]))
-    time.sleep(0.02)
-    env.grasp_object()
-    env.step(np.array([0.58, 0., 0.15118339]))
-    env.open_gripper()
-    env.reset()
+    while True:
+        y = np.random.uniform(-0.2, 0.2)
+        z = np.random.uniform(0.06, 0.25)
+        action = np.array([0.58, y, z])
+        img = env.step(action)
+        cv2.imshow("Captured Image", img)
+        cv2.waitKey(1)  # Use 1 instead of 0 to avoid blocking
+        # time.sleep(0.02)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    env.close()
+    cv2.destroyAllWindows()
+        # env.grasp_object()
+        # env.step(np.array([0.58, 0., 0.15118339]))
+        # env.open_gripper()
+        # env.reset()
 
