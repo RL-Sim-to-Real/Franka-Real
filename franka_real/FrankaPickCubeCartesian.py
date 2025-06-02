@@ -187,18 +187,14 @@ class FrankaPickCubeCartesian(gym.Env):
         self.apply_joint_vel(np.zeros((7,)))
         # close the gripper
         # self.close_gripper()
-        # self.open_gripper()
+        self.open_gripper()
         self._reset_stats()
-
-
-        target_pose = [0.0, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04]
-        target_pose = dict(zip(self.joint_names, target_pose))
 
         self.reset_ee_quaternion = [0,-1.,0,0]
         
-        self.out_of_boundary_flag = False
+        # self.out_of_boundary_flag = False
 
-        smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
+        # smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
         # print("here", self.robot.endpoint_pose()["orientation"])
         self.move_to_pose_ee(np.array([0.57, 0.0, 0.2]))
 
@@ -387,7 +383,7 @@ class FrankaPickCubeCartesian(gym.Env):
     def open_gripper(self):
         return self.gripper.open()
     def grasp_object(self):
-        return self.gripper.grasp(0.2, 5)
+        return self.gripper.grasp(0.04, 8)
 
     def close_gripper(self):
         return self.gripper.close()
@@ -452,7 +448,7 @@ if __name__ == "__main__":
         y = np.random.uniform(-0.2, 0.2)
         z = np.random.uniform(0.06, 0.25)
         action = np.array([0.58, y, z])
-        img = env.step(action)
+        img,_ = env.step(action)
         cv2.imshow("Captured Image", img)
         cv2.waitKey(1)  # Use 1 instead of 0 to avoid blocking
         # time.sleep(0.02)
