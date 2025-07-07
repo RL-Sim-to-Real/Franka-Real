@@ -66,7 +66,7 @@ class FrankaPickCubeCartesian(gym.Env):
         self.max_episode_duration = episode_length # in seconds
         signal.signal(signal.SIGINT, self.exit_handler)
         # config_file = os.path.join(os.path.dirname(__file__), os.pardir, 'reacher.yaml')
-        self.configs = configure('/home/chemist/Desktop/CoRL-2025/Franka-Real/franka_real/reacher.yaml')
+        self.configs = configure('/home/chemist/Desktop/ICRA2026/Franka-Real/franka_real/reacher.yaml')
         self.conf_exp = self.configs['experiment']
         self.conf_env = self.configs['environment']
 
@@ -126,7 +126,7 @@ class FrankaPickCubeCartesian(gym.Env):
 
         ## configure camera
 
-        device = "/dev/video6"
+        device = f"/dev/video{camera_index}"
 
         controls = {
             "brightness": -15,
@@ -304,7 +304,10 @@ class FrankaPickCubeCartesian(gym.Env):
 
     def _capture_img(self):
         self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
+        start = time.time()
         ret, frame = self.cap.read()
+        end = time.time()
+        print("Capture time:", end - start)
         if not ret:
             raise RuntimeError("Failed to capture image from camera.")
 
@@ -374,7 +377,7 @@ class FrankaPickCubeCartesian(gym.Env):
 
     
     def terminate(self):
-        self.close()
+        
         self.exit_handler(1)
 
     def seed(self, seed):
@@ -413,7 +416,7 @@ class FrankaPickCubeCartesian(gym.Env):
             
             #if max(np.abs(action[:3])) < 0.005 or 
             #print(action)
-            if max(np.abs(action[:3])) < 0.005 or counter > 100:
+            if max(np.abs(action[:3])) < 0.002 or counter > 100:
                 break
 
             #self.step(action, ignore_safety=True)
@@ -442,14 +445,14 @@ class FrankaPickCubeCartesian(gym.Env):
 
 ## TEST REALTIME environment
 if __name__ == "__main__":
-    env = FrankaPickCubeCartesian(camera_index=6)
+    env = FrankaPickCubeCartesian(camera_index=0)
     env.reset()
     while True:
         y = np.random.uniform(-0.2, 0.2)
         z = np.random.uniform(0.06, 0.25)
         action = np.array([0.58, y, z])
         img,_ = env.step(action)
-        cv2.imshow("Captured Image", img)
+        cv2.imshow("Captured Image", cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         cv2.waitKey(1)  # Use 1 instead of 0 to avoid blocking
         # time.sleep(0.02)
         if cv2.waitKey(1) & 0xFF == ord('q'):
