@@ -1,6 +1,6 @@
 displacement_radians: 0.1
 joint_to_displace: 1
-control_mode: 0 
-steps: 10
+control_mode: 1 
+steps: 20
 threshold: 0.001
-cycle_time: 0.009
+cycle_time: 0.002

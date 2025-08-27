@@ -59,7 +59,7 @@ class FrankaPositionController(gym.Env):
 
         rospy.init_node("franka_robot_gym")
 
-        self.configs = configure('/home/chemist/Desktop/CoRL-2025/Franka-Real/franka_real/reacher.yaml')
+        self.configs = configure('/home/chemist/Desktop/ICRA2026/Franka-Real/franka_real/reacher.yaml')
         self.conf_exp = self.configs['experiment']
         self.conf_env = self.configs['environment']
         self.joint_angle_bound = np.array(self.conf_env['joint-angle-bound'])
@@ -350,7 +350,7 @@ class FrankaPositionController(gym.Env):
     
 
 if __name__ == "__main__":
-    robot = FrankaPositionController()
+    robot = FrankaPositionController(dt=0.002)
     print(robot.reset())
     # robot.open_gripper()
     # robot.close_gripper()
@@ -376,30 +376,33 @@ if __name__ == "__main__":
     print(f"Joint to displace: {joint_to_displace}")
     print(f"Amount to displace in radians: {amount_to_displace_radians}")
     print(f"Number of steps: {num_steps}")
-    for _ in range(num_steps):
-        current_position = robot.get_state()["joints"]
-        target_position = current_position.copy()
-        joint_index = robot.joint_names.index(joint_to_displace)
-        # target_position[joint_index] += amount_to_displace_radians
-        target_position = np.array([0.2, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04])
-        # target_position += amount_to_displace_radians
-        current_positions.append(current_position[joint_index])
-        target_positions.append(target_position[joint_index])
-        print(f"Current position: {current_position}")
-        print(f"Target position: {target_position}")
-        start = time.time()
-        if mode_of_control == 0:
-            robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=True)
-        elif mode_of_control == 1:
-            robot.robot_status.enable()
-            robot.robot.set_joint_positions(dict(zip(robot.joint_names, target_position)))
-            time.sleep(config['cycle_time'])
-        elif mode_of_control == 2:
-            robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=False)
-        end = time.time()
+    target_position = np.array([0.3, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04])
+    smoothly_move_to_position(robot.robot, dict(zip(robot.joint_names, target_position)), control_frequency=1/config['cycle_time'])
+    # for _ in range(num_steps):
+    #     current_position = robot.get_state()["joints"]
+    #     target_position = current_position.copy()
+    #     joint_index = robot.joint_names.index(joint_to_displace)
+    #     # target_position[joint_index] += amount_to_displace_radians
+    #     target_position = np.array([0.2, 0.0, 0.0, -1.55, 0.0, 1.88, 0.75, 0.04, 0.04])
+    #     # target_position += amount_to_displace_radians
+    #     current_positions.append(current_position[joint_index])
+    #     target_positions.append(target_position[joint_index])
+    #     print(f"Current position: {current_position}")
+    #     print(f"Target position: {target_position}")
+    #     start = time.time()
+    #     if mode_of_control == 0:
+    #         robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=True)
+    #     elif mode_of_control == 1:
+    #         robot.robot_status.enable()
+    #         # robot.robot.set_joint_positions(dict(zip(robot.joint_names, target_position)))
+            
+    #         time.sleep(config['cycle_time'])
+    #     elif mode_of_control == 2:
+    #         robot.robot.move_to_joint_positions(dict(zip(robot.joint_names, target_position)), threshold=threshold, use_moveit=False)
+    #     end = time.time()
 
-        action_times.append(end - start)
-        print(f"Time taken to move joint {joint_to_displace} by {amount_to_displace_radians} radians: {end - start} seconds")
+    #     action_times.append(end - start)
+    #     # print(f"Time taken to move joint {joint_to_displace} by {amount_to_displace_radians} radians: {end - start} seconds")
 
     time.sleep(1.0)
     robot.reset()
