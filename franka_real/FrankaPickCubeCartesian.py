@@ -37,6 +37,7 @@ from scipy.spatial.transform import Rotation as R
 import quaternion
 import subprocess
 
+from .franka_analytic_ik import franka_analytic_ik
 
 ARM_VEL_LIMITS = np.array([2.61799, 2.61799, 2.61799, 2.61799, 3.14159, 3.14159, 3.14159, 0])
 
@@ -126,27 +127,28 @@ class FrankaPickCubeCartesian(gym.Env):
 
         ## configure camera
 
-        device = f"/dev/video{camera_index}"
+        # device = f"/dev/video{camera_index}"
 
-        controls = {
-            "brightness": -15,
-            "contrast": 14,
-            "saturation": 100,
-            "white_balance_temperature_auto": 1,
-            "gamma": 115,
-            "power_line_frequency": 2,
-            "sharpness": 2,
-            "backlight_compensation": 1,
-            "exposure_auto": 1,
-            "exposure_absolute": 1694,
-            "focus_absolute": 169,
-            "focus_auto": 0,
-        }
+        # controls = {
+        #     "brightness": -15,
+        #     "contrast": 14,
+        #     "saturation": 100,
+        #     "white_balance_temperature_auto": 1,
+        #     "gamma": 115,
+        #     "power_line_frequency": 2,
+        #     "sharpness": 2,
+        #     "backlight_compensation": 1,
+        #     "exposure_auto": 1,
+        #     "exposure_absolute": 1694,
+        #     "focus_absolute": 169,
+        #     "focus_auto": 0,
+        # }
 
-        for key, value in controls.items():
-            subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
+        # for key, value in controls.items():
+        #     subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
         
-        self.cap = cv2.VideoCapture(camera_index)
+        # self.cap = cv2.VideoCapture(camera_index)
+        # self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
 
 
     def _reset_stats(self):
@@ -211,7 +213,7 @@ class FrankaPickCubeCartesian(gym.Env):
         self._reset_stats()
     
         
-        return self._capture_img(), self._get_end_effector_pos(), {}
+        return self._get_end_effector_pos(), {}
 
 
     def get_robot_jacobian(self):
@@ -239,6 +241,11 @@ class FrankaPickCubeCartesian(gym.Env):
         yaw_z = math.atan2(t3, t4)
      
         return roll_x, pitch_y, yaw_z # in radians
+
+    def matrix_from_quaternion(self,q):
+        scalar_last = (q[1], q[2], q[3], q[0])
+        matrix = R.from_quat(scalar_last).as_matrix()
+        return matrix
 
     def get_state(self):
         # get object state
@@ -297,13 +304,13 @@ class FrankaPickCubeCartesian(gym.Env):
         self.cur_step += 1
         self.robot_status.enable()
         
-        self.move_to_pose_ee(action[:3])
+        # self.move_to_pose_ee(action[:3])
+        self.move_to_target_xyz(action)
         
-        return self._capture_img(), self._get_end_effector_pos()
+        return self._get_end_effector_pos()
 
 
     def _capture_img(self):
-        self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
         start = time.time()
         ret, frame = self.cap.read()
         end = time.time()
@@ -386,10 +393,15 @@ class FrankaPickCubeCartesian(gym.Env):
     def open_gripper(self):
         return self.gripper.open()
     def grasp_object(self):
-        return self.gripper.grasp(0.04, 8)
+        # self.robot_status.enable()
+        return self.gripper.grasp(0, 4, speed=0.1, epsilon_outer=0.1)
 
     def close_gripper(self):
         return self.gripper.close()
+
+    def get_fingertip_width(self):
+        finger_positions = self.gripper.joint_ordered_positions()
+        return finger_positions[0] + finger_positions[1]
 
     def _compute_distance(self, joint_angles):
         robotic_arm_pointer = self._get_end_effector_pos()
@@ -441,6 +453,33 @@ class FrankaPickCubeCartesian(gym.Env):
             self.rate.sleep()
         self.apply_joint_vel(np.zeros((7,)))
 
+    def move_to_target_xyz(self, target_xyz):
+        obs = self.get_state()
+        new_ee_mat = np.identity(4)
+        # new_ee_mat[:3, :3] = self.ee_ori_mat
+        new_ee_mat[:3, :3] = self.matrix_from_quaternion(self.ee_orientation)
+        new_ee_mat[:3, 3] = target_xyz
+        q7 = obs['joints'][6]
+        q_actual = obs['joints']
+        q = franka_analytic_ik(new_ee_mat, q7, q_actual)
+
+        # if self.target_q is None:
+        #     self.target_q = q_actual.copy()
+        #     self.target_q[0] += .2
+        joint_positions = dict(zip(self.joint_names, q))
+        smoothly_move_to_position(self.robot, joint_positions, control_frequency=1/0.002, motion_duration=4)
+        # smoothly_move_to_position_vel(self.robot, self.robot_status, joint_positions, control_frequency=40)
+
+        # q = q_actual.copy()
+        # q[0] += .01
+        # print('q: ', type(q), q)
+        joint_positions = dict(zip(self.joint_names, q))
+        # print(q - q_actual, q_actual)
+        # self.robot.set_joint_positions(joint_positions)
+        # jv = np.zeros(7)
+        # jv[6] = .02
+        # self.robot.set_joint_velocities(dict(zip(self.joint_names, jv)))
+        # self.rate.sleep()
     
 
 ## TEST REALTIME environment
