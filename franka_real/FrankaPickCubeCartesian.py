@@ -304,8 +304,8 @@ class FrankaPickCubeCartesian(gym.Env):
         self.cur_step += 1
         self.robot_status.enable()
         
-        # self.move_to_pose_ee(action[:3])
-        self.move_to_target_xyz(action)
+        self.move_to_pose_ee(action[:3])
+        # self.move_to_target_xyz(action)
         
         return self._get_end_effector_pos()
 
