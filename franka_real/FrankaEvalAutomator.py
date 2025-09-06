@@ -65,11 +65,24 @@ class FrankaEvalAutomator:
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
 
-        # # Draw contour and centroid on the color image for visualization
-        # cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)
-        # cv2.circle(color_image, (cx, cy), 5, (255, 0, 0), -1)
-        # cv2.imshow("Color Image with Contour", color_image)
-        # cv2.waitKey(1)
+        # get cube's yaw angle
+        rect = cv2.minAreaRect(c)
+        angle = rect[2]
+        w, h = rect[1]
+        angle_180 = angle + 90 if w < h else angle
+        angle_180 = angle_180 % 180
+        aspect = min(w, h) / max(w, h)
+        is_square = 1.0 if aspect >= 0.8 else 0.0
+
+        # Draw contour, centroid, and rect's angle on the color image for visualization
+        cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)
+        cv2.circle(color_image, (cx, cy), 5, (255, 0, 0), -1)
+        box = cv2.boxPoints(rect)
+        box = np.round(box).astype(np.intp)
+        cv2.drawContours(color_image, [box], 0, (255, 0, 255), 2)
+        cv2.putText(color_image, f'Angle_180: {angle_180:.2f}', (cx, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.imshow("Color Image with Contour", color_image)
+        cv2.waitKey(1)
 
         # Depth intrinsics
         depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
@@ -82,7 +95,7 @@ class FrankaEvalAutomator:
 
         # Pixel → Camera coordinates
         point_cam = rs.rs2_deproject_pixel_to_point(depth_intrin, [cx, cy], depth)
-        point_cam = np.array([point_cam[0], point_cam[1], point_cam[2], 1.0], dtype=np.float32)
+        point_cam = np.array([point_cam[0], point_cam[1], point_cam[2], 1.0, angle, angle_180, is_square], dtype=np.float32)
         # point_cam = np.array([point_cam[1], -point_cam[0], -point_cam[2], 1.0], dtype=np.float32)
         return point_cam
 

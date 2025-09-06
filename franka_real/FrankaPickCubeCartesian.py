@@ -26,6 +26,7 @@ import logging
 import cv2
 
 from franka_interface import ArmInterface, RobotEnable, GripperInterface
+from franka_tools import FrankaControllerManagerInterface
 # ids camera lib for use of IDS ueye cameras.
 # https://www.ids-imaging.us/files/downloads/ids-peak/readme/ids-peak-linux-readme-1.2_EN.html
 #import ids
@@ -124,6 +125,8 @@ class FrankaPickCubeCartesian(gym.Env):
 
         self.episode_target = self.targets[0]
         self.total_timesteps = 0
+        self.reset_ee_quaternion = [0,-1.,0,0]
+        self.cmi = FrankaControllerManagerInterface()
 
         ## configure camera
 
@@ -412,10 +415,13 @@ class FrankaPickCubeCartesian(gym.Env):
 
         ee_pose = self.robot.endpoint_pose()
         return ee_pose['position']
-    def move_to_pose_ee(self, ref_ee_pos, pose_vel_limit=0.2):
+    def move_to_pose_ee(self, ref_ee_pos, ref_ee_angle=None, pose_vel_limit=0.2):
         counter = 0
         # print('11111', rospy.Time.now())
         
+        if ref_ee_angle is None:
+            ref_ee_angle = np.array(self.euler_from_quaternion(self.reset_ee_quaternion))
+
         while True:
             self.robot_status.enable()
             
@@ -426,17 +432,8 @@ class FrankaPickCubeCartesian(gym.Env):
             action[:3] = ref_ee_pos-self.ee_position
             action[-1] = 1
             
-            #if max(np.abs(action[:3])) < 0.005 or 
-            #print(action)
-            if max(np.abs(action[:3])) < 0.002 or counter > 100:
-                break
-
-            #self.step(action, ignore_safety=True)
-            # limit action
-            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
-
             # calculate joint actions
-            d_angle =  np.array(self.euler_from_quaternion(self.reset_ee_quaternion)) - np.array(self.euler_from_quaternion(self.ee_orientation))
+            d_angle =  ref_ee_angle - np.array(self.euler_from_quaternion(self.ee_orientation))
             for i in range(3):
                 if d_angle[i] < -np.pi:
                     d_angle[i] += 2*np.pi
@@ -444,6 +441,31 @@ class FrankaPickCubeCartesian(gym.Env):
                     d_angle[i] -= 2*np.pi
             d_angle *= 0.5
             #print('d_angle', d_angle)
+
+            #if max(np.abs(action[:3])) < 0.005 or 
+            #print(action)
+            if counter > 290 * 0.04 / self.dt:
+                curr_contr = self.cmi.current_controller
+                # print(curr_contr, self.cmi.is_running(curr_contr))
+                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
+                self.cmi.stop_controller(curr_contr)
+                while self.cmi.is_running(curr_contr):
+                    print('waiting for controller to stop')
+                    time.sleep(1)
+                self.cmi.start_controller(curr_contr)
+                counter = 0
+            if max(np.abs(action[:3])) < 0.002 and max(np.abs(d_angle)) < 0.1:
+                if counter > 300 * 0.04 / self.dt:
+                    print('----------------------------------------------------', counter)
+                for _ in range(5):
+                    self.apply_joint_vel(np.zeros((7,)))
+                    self.rate.sleep()
+                break
+
+            #self.step(action, ignore_safety=True)
+            # limit action
+            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
+
             d_X = np.array([pose_action[0], pose_action[1], pose_action[2], d_angle[0],d_angle[1],d_angle[2]])
             joints_action = self.get_joint_vel_from_pos_vel(d_X)
             # print('joints_action', joints_action)
@@ -451,7 +473,9 @@ class FrankaPickCubeCartesian(gym.Env):
             
             # action cycle time
             self.rate.sleep()
-        self.apply_joint_vel(np.zeros((7,)))
+        for _ in range(5):
+            self.apply_joint_vel(np.zeros((7,)))
+            self.rate.sleep()
 
     def move_to_target_xyz(self, target_xyz):
         obs = self.get_state()
@@ -480,6 +504,10 @@ class FrankaPickCubeCartesian(gym.Env):
         # jv[6] = .02
         # self.robot.set_joint_velocities(dict(zip(self.joint_names, jv)))
         # self.rate.sleep()
+    
+    def move_to_joint_positions(self, target_joints):
+        joint_positions = dict(zip(self.joint_names, target_joints))
+        smoothly_move_to_position_vel(self.robot, self.robot_status, joint_positions)
     
 
 ## TEST REALTIME environment
