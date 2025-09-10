@@ -60,11 +60,12 @@ class FrankaPickCubeCartesian(gym.Env):
     """
     Gym env for the real franka robot. Set up to perform the placement of a peg that starts in the robots hand into a slot
     """
-    def __init__(self, dt=0.04, episode_length=8, camera_index=0, seed=9, size_tol=0.45, render=False):
+    def __init__(self, dt=0.04, episode_length=8, camera_index=0, control_mode='joint_velocity', seed=9, size_tol=0.45, render=False):
         np.random.seed(seed)
         self.DT= dt
         self.dt = dt
         self.ep_time = 0
+        self.control_mode = control_mode
         self.max_episode_duration = episode_length # in seconds
         signal.signal(signal.SIGINT, self.exit_handler)
         # config_file = os.path.join(os.path.dirname(__file__), os.pardir, 'reacher.yaml')
@@ -127,6 +128,7 @@ class FrankaPickCubeCartesian(gym.Env):
         self.total_timesteps = 0
         self.reset_ee_quaternion = [0,-1.,0,0]
         self.cmi = FrankaControllerManagerInterface()
+        self.stale_counter = 0
 
         ## configure camera
 
@@ -212,6 +214,8 @@ class FrankaPickCubeCartesian(gym.Env):
         self.reset_time = time.time()
 
         self.cur_step = 0 
+        self.stale_counter = 0
+        self.prev_joints = None
 
         self._reset_stats()
     
@@ -263,7 +267,7 @@ class FrankaPickCubeCartesian(gym.Env):
                          ee_pose['orientation'].y, ee_pose['orientation'].z]
 
         self.last_action_history.append(self.prev_action)
-        
+
         observation = {
             
             'last_action': self.prev_action,
@@ -302,14 +306,63 @@ class FrankaPickCubeCartesian(gym.Env):
         self.robot.set_joint_velocities(joint_vels)        
         return True
 
-    def step(self, action):
+    def step(self, action, control_mode=None):
+        control_mode = self.control_mode if control_mode is None else control_mode
         self.ep_time += self.dt
         self.cur_step += 1
         self.robot_status.enable()
-        
-        self.move_to_pose_ee(action[:3])
-        # self.move_to_target_xyz(action)
-        
+
+        if control_mode == 'cartesian_position':
+            ee_pos = self._get_end_effector_pos()
+            target_xyz = 0.04 * action[:3] + ee_pos
+            target_xyz = np.array([target_xyz[0], \
+                                    np.clip(target_xyz[1], -0.4, 0.4), \
+                                    np.clip(target_xyz[2], 0.035, 0.2)]) # for safety
+            print(f"Target position: {target_xyz}, Current position: {ee_pos}")
+            self.move_to_target_xyz(target_xyz) # analytic ik
+            # self.move_to_pose_ee(target_xyz) # ReLoD's ik
+        elif control_mode == 'joint_position':
+            joint_positions = self.get_state()['joints']
+            target_joints = joint_positions + action[:7] * 0.04
+            target_joints = dict(zip(self.joint_names, target_joints))
+            t0 = time.time()
+            smoothly_move_to_position(self.robot, target_joints, control_frequency=1/0.04, motion_duration=2)
+            print(f'Time taken to move: {time.time() - t0}')
+            new_joints = self.get_state()['joints']
+            if np.linalg.norm(new_joints - joint_positions) < 0.001:
+                curr_contr = self.cmi.current_controller
+                # print(curr_contr, self.cmi.is_running(curr_contr))
+                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
+                self.cmi.stop_controller(curr_contr)
+                while self.cmi.is_running(curr_contr):
+                    print('waiting for controller to stop')
+                    time.sleep(1)
+                self.cmi.start_controller(curr_contr)
+        elif control_mode == 'joint_velocity':
+            new_joints = self.get_state()['joints']
+            if self.prev_joints is None:
+                self.prev_joints = new_joints
+            else:
+                if np.linalg.norm(new_joints - self.prev_joints) < 0.00001:
+                    self.stale_counter += 1
+            if self.stale_counter > 300:
+                curr_contr = self.cmi.current_controller
+                # print(curr_contr, self.cmi.is_running(curr_contr))
+                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
+                self.cmi.stop_controller(curr_contr)
+                while self.cmi.is_running(curr_contr):
+                    print('waiting for controller to stop')
+                    time.sleep(1)
+                self.cmi.start_controller(curr_contr)
+                self.stale_counter = 0
+
+            scaled_action = action[:7] * 0.02
+            self.apply_joint_vel(scaled_action)
+            self.prev_joints = new_joints
+            self.rate.sleep()
+        elif control_mode == 'joint_torque':
+            raise NotImplementedError
+            
         return self._get_end_effector_pos()
 
 
@@ -491,8 +544,20 @@ class FrankaPickCubeCartesian(gym.Env):
         #     self.target_q = q_actual.copy()
         #     self.target_q[0] += .2
         joint_positions = dict(zip(self.joint_names, q))
-        smoothly_move_to_position(self.robot, joint_positions, control_frequency=1/0.002, motion_duration=4)
+        smoothly_move_to_position(self.robot, joint_positions, control_frequency=1/0.04, motion_duration=2)
         # smoothly_move_to_position_vel(self.robot, self.robot_status, joint_positions, control_frequency=40)
+
+        # restart controller if new joint positions are close to old ones
+        new_joints = self.get_state()['joints']
+        if np.linalg.norm(new_joints - obs['joints']) < 0.001:
+            curr_contr = self.cmi.current_controller
+            # print(curr_contr, self.cmi.is_running(curr_contr))
+            print('------------------------------------------------------ stale controller, restarting ', curr_contr)
+            self.cmi.stop_controller(curr_contr)
+            while self.cmi.is_running(curr_contr):
+                print('waiting for controller to stop')
+                time.sleep(1)
+            self.cmi.start_controller(curr_contr)
 
         # q = q_actual.copy()
         # q[0] += .01

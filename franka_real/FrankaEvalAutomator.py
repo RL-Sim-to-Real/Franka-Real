@@ -74,15 +74,15 @@ class FrankaEvalAutomator:
         aspect = min(w, h) / max(w, h)
         is_square = 1.0 if aspect >= 0.8 else 0.0
 
-        # Draw contour, centroid, and rect's angle on the color image for visualization
-        cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)
-        cv2.circle(color_image, (cx, cy), 5, (255, 0, 0), -1)
-        box = cv2.boxPoints(rect)
-        box = np.round(box).astype(np.intp)
-        cv2.drawContours(color_image, [box], 0, (255, 0, 255), 2)
-        cv2.putText(color_image, f'Angle_180: {angle_180:.2f}', (cx, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.imshow("Color Image with Contour", color_image)
-        cv2.waitKey(1)
+        # # Draw contour, centroid, and rect's angle on the color image for visualization
+        # cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)
+        # cv2.circle(color_image, (cx, cy), 5, (255, 0, 0), -1)
+        # box = cv2.boxPoints(rect)
+        # box = np.round(box).astype(np.intp)
+        # cv2.drawContours(color_image, [box], 0, (255, 0, 255), 2)
+        # cv2.putText(color_image, f'Angle_180: {angle_180:.2f}', (cx, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # cv2.imshow("Color Image with Contour", color_image)
+        # cv2.waitKey(1)
 
         # Depth intrinsics
         depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
