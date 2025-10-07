@@ -7,6 +7,8 @@ from scipy.spatial.transform import Rotation as R
 import json
 import os
 
+from franka_real.FrankaPickCubeCartesian import FrankaPickCubeCartesian
+
 # Chessboard settings
 PATTERN_SIZE = (9, 6)   # inner corners
 SQUARE_SIZE = 0.025     # meters (25mm)
@@ -62,11 +64,14 @@ def matrix_from_quaternion(q):
     matrix = R.from_quat(scalar_last).as_matrix()
     return matrix
 
-def collect_calibration_dataset():
-    rospy.init_node("handeye_data_collector")
+def collect_calibration_dataset(use_stored_poses=False):
+    # rospy.init_node("handeye_data_collector")
+    if use_stored_poses:
+        saved_T_base_ee, _, saved_joint_positions = load_dataset(os.path.expanduser("handeye_dataset_orig.json"))
 
     # --- Franka ---
-    arm = ArmInterface()
+    # arm = ArmInterface()
+    env = FrankaPickCubeCartesian()
 
     # --- RealSense ---
     pipeline = rs.pipeline()
@@ -94,9 +99,14 @@ def collect_calibration_dataset():
     rospy.loginfo("Starting calibration capture loop...")
     for i in range(30):
         # Move robot
-        input(f'{i}: move the robot to new position and press Enter to capture')
-        # arm.set_ee_pose(position=pos, orientation=q_down, duration=3.0)
-        rospy.sleep(1.0)
+        if not use_stored_poses:
+            input(f'{i}: move the robot to new position and press Enter to capture')
+        else:
+            # pos = saved_T_base_ee[i][:3, 3]
+            # ori = np.array(env.euler_from_quaternion(R.from_matrix(saved_T_base_ee[i][:3, :3]).as_quat(scalar_first=True)))
+            # # arm.move_to_cartesian_pose(pos, ori=ori, use_moveit=False)
+            # env.move_to_pose_ee(pos, ref_ee_angle=ori, pose_vel_limit=0.05)
+            env.move_to_joint_positions(saved_joint_positions[i])
 
         # Get frames
         frames = pipeline.wait_for_frames()
@@ -113,17 +123,19 @@ def collect_calibration_dataset():
             continue
 
         # Get robot pose
-        ee_pose = arm.endpoint_pose()  # has .translation and .quaternion
+        ee_pose = env.robot.endpoint_pose()  # has .translation and .quaternion
         ee_quaternion = [ee_pose['orientation'].w, ee_pose['orientation'].x,
                          ee_pose['orientation'].y, ee_pose['orientation'].z]
         # R_ee = R.from_quat(ee_pose.quaternion).as_matrix()
         R_ee = matrix_from_quaternion(ee_quaternion)
         T_base_ee = make_homog(R_ee, ee_pose['position'])
+        joint_positions = env.get_state()['joints']
 
         # Store
         dataset.append({
             "T_base_ee": T_base_ee.tolist(),
-            "T_camera_board": T_camera_board.tolist()
+            "T_camera_board": T_camera_board.tolist(),
+            "joint_position": joint_positions.tolist(),
         })
 
         # Show feedback
@@ -137,6 +149,7 @@ def collect_calibration_dataset():
         #                           True)
         cv2.imshow("Chessboard Detection", color_image)
         cv2.waitKey(500)
+        rospy.sleep(3.0)
 
     pipeline.stop()
     cv2.destroyAllWindows()
@@ -151,7 +164,8 @@ def load_dataset(filename):
         data = json.load(f)
     T_base_ee = [np.array(d["T_base_ee"]) for d in data]
     T_camera_board = [np.array(d["T_camera_board"]) for d in data]
-    return T_base_ee, T_camera_board
+    joint_position = [np.array(d["joint_position"]) for d in data]
+    return T_base_ee, T_camera_board, joint_position
 
 def relative_motion(poses):
     """Compute relative motions between consecutive transforms."""
@@ -164,7 +178,7 @@ def relative_motion(poses):
 
 def calculate_T_ee_camera():
     dataset_file = os.path.expanduser("handeye_dataset.json")
-    T_base_ee, T_camera_board = load_dataset(dataset_file)
+    T_base_ee, T_camera_board, _ = load_dataset(dataset_file)
 
     if len(T_base_ee) < 2:
         print("Not enough samples! Collect at least 10–15.")
@@ -205,4 +219,6 @@ def calculate_T_ee_camera():
 
 if __name__ == "__main__":
     # collect_calibration_dataset()
+    collect_calibration_dataset(use_stored_poses=True)
     calculate_T_ee_camera()
+

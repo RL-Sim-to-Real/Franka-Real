@@ -6,7 +6,7 @@ import pyrealsense2 as rs
 
 class FrankaEvalAutomator:
     def __init__(self):
-        pass
+        self.aspect_trace = 0
         # self.pipeline = rs.pipeline()
         # config = rs.config()
         # config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
@@ -37,9 +37,10 @@ class FrankaEvalAutomator:
         hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
 
         # Red thresholds (wrap-around in HSV)
-        lower_red1 = np.array([0, 120, 70])
+        s_min, v_min = 150, 80
+        lower_red1 = np.array([0, s_min, v_min])
         upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([170, 120, 70])
+        lower_red2 = np.array([170, s_min, v_min])
         upper_red2 = np.array([180, 255, 255])
 
         mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
@@ -72,7 +73,9 @@ class FrankaEvalAutomator:
         angle_180 = angle + 90 if w < h else angle
         angle_180 = angle_180 % 180
         aspect = min(w, h) / max(w, h)
-        is_square = 1.0 if aspect >= 0.8 else 0.0
+        self.aspect_trace = 0.97 * self.aspect_trace + 0.03 * aspect
+        # print(f'aspect_trace: {self.aspect_trace:.3f}')
+        is_square = 1.0 if self.aspect_trace >= 0.8 else 0.0
 
         # # Draw contour, centroid, and rect's angle on the color image for visualization
         # cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)

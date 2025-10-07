@@ -2,12 +2,12 @@ from tkinter import S
 import numpy as np
 
 import time
-from gymnasium import spaces
+from gym import spaces
 
-import gymnasium as gym
-from gymnasium.core import ActionWrapper
+import gym
+from gym.core import ActionWrapper
 import numpy as np
-from gymnasium import spaces
+from gym import spaces
 import os
 
 from numpy.core.defchararray import count
@@ -16,7 +16,8 @@ from PIL import Image
 import math
 from collections import deque
 
-from franka_utils import *
+from .franka_utils import *
+from .franka_analytic_ik import franka_analytic_ik
 
 import matplotlib as mpl
 from matplotlib import pyplot as plt
@@ -26,20 +27,17 @@ import logging
 import cv2
 
 from franka_interface import ArmInterface, RobotEnable, GripperInterface
-from franka_tools import FrankaControllerManagerInterface
 # ids camera lib for use of IDS ueye cameras.
 # https://www.ids-imaging.us/files/downloads/ids-peak/readme/ids-peak-linux-readme-1.2_EN.html
 #import ids
 import time
 import signal
 import multiprocessing
-from gymnasium.spaces import Box as GymBox
+from gym.spaces import Box as GymBox
 from scipy.spatial.transform import Rotation as R
 import quaternion
 import subprocess
 
-from .franka_analytic_ik import franka_analytic_ik
-from .metric_logger import MetricLogger
 
 ARM_VEL_LIMITS = np.array([2.61799, 2.61799, 2.61799, 2.61799, 3.14159, 3.14159, 3.14159, 0])
 
@@ -61,12 +59,11 @@ class FrankaPickCubeCartesian(gym.Env):
     """
     Gym env for the real franka robot. Set up to perform the placement of a peg that starts in the robots hand into a slot
     """
-    def __init__(self, dt=0.04, episode_length=8, camera_index=0, control_mode='joint_velocity', seed=9, size_tol=0.45, render=False):
+    def __init__(self, dt=0.04, episode_length=8, camera_index=0, seed=9, size_tol=0.45, render=False):
         np.random.seed(seed)
         self.DT= dt
         self.dt = dt
         self.ep_time = 0
-        self.control_mode = control_mode
         self.max_episode_duration = episode_length # in seconds
         signal.signal(signal.SIGINT, self.exit_handler)
         # config_file = os.path.join(os.path.dirname(__file__), os.pardir, 'reacher.yaml')
@@ -88,7 +85,6 @@ class FrankaPickCubeCartesian(gym.Env):
         self.robot = ArmInterface(True)
         print(self.robot.joint_names())
         self.gripper = GripperInterface()
-        # self.gripper.home_joints()
         force = 1e-6
         self.robot.set_collision_threshold(cartesian_forces=[force,force,force,force,force,force])
         self.robot.exit_control_mode(0.1)
@@ -128,36 +124,30 @@ class FrankaPickCubeCartesian(gym.Env):
 
         self.episode_target = self.targets[0]
         self.total_timesteps = 0
-        self.reset_ee_quaternion = [0,-1.,0,0]
-        self.cmi = FrankaControllerManagerInterface()
-        self.stale_counter = 0
-        self.max_stale_steps = 300
-        self.logger = MetricLogger()
 
         ## configure camera
 
-        # device = f"/dev/video{camera_index}"
+        device = f"/dev/video{camera_index}"
 
-        # controls = {
-        #     "brightness": -15,
-        #     "contrast": 14,
-        #     "saturation": 100,
-        #     "white_balance_temperature_auto": 1,
-        #     "gamma": 115,
-        #     "power_line_frequency": 2,
-        #     "sharpness": 2,
-        #     "backlight_compensation": 1,
-        #     "exposure_auto": 1,
-        #     "exposure_absolute": 1694,
-        #     "focus_absolute": 169,
-        #     "focus_auto": 0,
-        # }
+        controls = {
+            "brightness": -15,
+            "contrast": 14,
+            "saturation": 100,
+            "white_balance_temperature_auto": 1,
+            "gamma": 115,
+            "power_line_frequency": 2,
+            "sharpness": 2,
+            "backlight_compensation": 1,
+            "exposure_auto": 1,
+            "exposure_absolute": 1694,
+            "focus_absolute": 169,
+            "focus_auto": 0,
+        }
 
-        # for key, value in controls.items():
-        #     subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
+        for key, value in controls.items():
+            subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
         
-        # self.cap = cv2.VideoCapture(camera_index)
-        # self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
+        self.cap = cv2.VideoCapture(camera_index)
 
 
     def _reset_stats(self):
@@ -208,7 +198,6 @@ class FrankaPickCubeCartesian(gym.Env):
         # smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
         # print("here", self.robot.endpoint_pose()["orientation"])
         self.move_to_pose_ee(np.array([0.57, 0.0, 0.2]))
-        # self.move_to_pose_ee(np.array([0.655, 0.0, 0.2]))
 
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
@@ -218,18 +207,13 @@ class FrankaPickCubeCartesian(gym.Env):
         self.tv = time.time()
         self.reset_time = time.time()
 
-        self.grasped = False
         self.cur_step = 0 
-        self.stale_counter = 0
-        self.actuation_steps = 0
-        self.prev_joints = None
-        self.prev_joint_vels = 0.0
-        self.prev_joint_accels = 0.0
 
         self._reset_stats()
     
+        self.target_q = None
         
-        return self._get_end_effector_pos(), {}
+        return self._capture_img(), self._get_end_effector_pos(), {}
 
 
     def get_robot_jacobian(self):
@@ -276,15 +260,12 @@ class FrankaPickCubeCartesian(gym.Env):
                          ee_pose['orientation'].y, ee_pose['orientation'].z]
 
         self.last_action_history.append(self.prev_action)
-
-        ee_height = ee_pose['position'][2]
-
+        
         observation = {
             
             'last_action': self.prev_action,
             'joints': np.array(joint_angles),
-            'joint_vels': np.array(joint_velocitys),
-            'height': np.array([ee_height])
+            'joint_vels': np.array(joint_velocitys)
         }
         # print('orientation',ee_pose['orientation'])
         self.ee_position = ee_pose['position']
@@ -318,128 +299,18 @@ class FrankaPickCubeCartesian(gym.Env):
         self.robot.set_joint_velocities(joint_vels)        
         return True
 
-    def log_metrics(self, dt=None):
-        dt = self.dt if dt is None else dt
-        obs = self.get_state()
-        joint_accels = (obs['joint_vels'] - self.prev_joint_vels) / dt
-        joint_jerks = (joint_accels - self.prev_joint_accels) / dt
-        self.logger.log({
-            't': self.actuation_steps,
-            'success': False,
-            'grasped': self.grasped,
-            'has_collided': self.robot.has_collided(),
-            'joint_jerks': np.linalg.norm(joint_jerks),
-            'proprioception': np.concatenate([obs['joints'], obs['joint_vels']], axis=0).astype(np.float32),
-        })
-        # print(f'jerk norm: {np.linalg.norm(joint_jerks):.4f}')
-        self.prev_joint_vels = obs['joint_vels']
-        self.prev_joint_accels = joint_accels
-        self.actuation_steps += 1
-
-    def step(self, action, control_mode=None):
-        control_mode = self.control_mode if control_mode is None else control_mode
+    def step(self, action):
         self.ep_time += self.dt
         self.cur_step += 1
         self.robot_status.enable()
-        action_scale = 0.05
-        if control_mode == 'cartesian_position':
-            ee_pos = self._get_end_effector_pos()
-            target_xyz = 0.01 * action[:3] + ee_pos
-            target_xyz = np.array([target_xyz[0], \
-                                    np.clip(target_xyz[1], -0.4, 0.4), \
-                                    np.clip(target_xyz[2], 0.035, 0.2)]) # for safety
-            print(f"Target position: {target_xyz}, Current position: {ee_pos}")
-            self.move_to_target_xyz(target_xyz) # analytic ik
-            
-
-            # self.move_to_pose_ee(target_xyz) # ReLoD's ik
-        elif control_mode == 'joint_position':
-            joint_positions = self.get_state()['joints']
-            target_joints = joint_positions + action[:7] * 0.03
-            target_joints = dict(zip(self.joint_names, target_joints))
-            t0 = time.time()
-            control_frequency, motion_duration = 1 / 0.04, 2
-            # smoothly_move_to_position(self, self.robot, target_joints, control_frequency=control_frequency, motion_duration=motion_duration)
-            self.robot.set_joint_positions(target_joints)
-            self.log_metrics()
-            self.rate.sleep()
-            print(f'Time taken to move: {time.time() - t0}')
-            new_joints = self.get_state()['joints']
-            # print('norm joint diff: ', np.linalg.norm(new_joints - joint_positions))
-            if np.linalg.norm(new_joints - joint_positions) < 0.0001:
-                self.stale_counter += 1
-                if self.stale_counter > self.max_stale_steps:
-                    curr_contr = self.cmi.current_controller
-                    # print(curr_contr, self.cmi.is_running(curr_contr))
-                    print('------------------------------------------------------ stale controller, restarting ', curr_contr)
-                    self.cmi.stop_controller(curr_contr)
-                    while self.cmi.is_running(curr_contr):
-                        print('waiting for controller to stop')
-                        time.sleep(1)
-                    self.cmi.start_controller(curr_contr)
-                    self.stale_counter = 0
-                    self.logger.pop(int(control_frequency * motion_duration))
-                    # self.actuation_steps -= int(control_frequency * motion_duration)
-                    self.actuation_steps -= self.max_stale_steps
-            else:
-                self.stale_counter = 0
-        elif control_mode == 'joint_velocity':
-            new_joints = self.get_state()['joints']
-            if self.prev_joints is None:
-                self.prev_joints = new_joints
-            else:
-                if np.linalg.norm(new_joints - self.prev_joints) < 0.0001:
-                    self.stale_counter += 1
-                    if self.stale_counter > self.max_stale_steps:
-                        curr_contr = self.cmi.current_controller
-                        # print(curr_contr, self.cmi.is_running(curr_contr))
-                        print('------------------------------------------------------ stale controller, restarting ', curr_contr)
-                        self.cmi.stop_controller(curr_contr)
-                        while self.cmi.is_running(curr_contr):
-                            print('waiting for controller to stop')
-                            time.sleep(1)
-                        self.cmi.start_controller(curr_contr)
-                        self.stale_counter = 0
-                        self.logger.pop(self.max_stale_steps)
-                        self.actuation_steps -= self.max_stale_steps
-                else:
-                    self.stale_counter = 0
-            scaled_action = action[:7] * 0.1
-            self.apply_joint_vel(scaled_action)
-            self.prev_joints = new_joints
-            self.log_metrics()
-            self.rate.sleep()
-        elif control_mode == 'joint_torque':
-            new_joints = self.get_state()['joints']
-            if self.prev_joints is None:
-                self.prev_joints = new_joints
-            else:
-                if np.linalg.norm(new_joints - self.prev_joints) < 0.00001:
-                    self.stale_counter += 1
-                    if self.stale_counter > self.max_stale_steps:
-                        curr_contr = self.cmi.current_controller
-                        # print(curr_contr, self.cmi.is_running(curr_contr))
-                        print('------------------------------------------------------ stale controller, restarting ', curr_contr)
-                        self.cmi.stop_controller(curr_contr)
-                        while self.cmi.is_running(curr_contr):
-                            print('waiting for controller to stop')
-                            time.sleep(1)
-                        self.cmi.start_controller(curr_contr)
-                        self.stale_counter = 0
-                        self.logger.pop(self.max_stale_steps)
-                        self.actuation_steps -= self.max_stale_steps
-                    else:
-                        self.stale_counter = 0
-            gc_torques = self.robot.gravity_comp()
-            c_comp = self.robot.coriolis_comp()
-            joint_torques = action[:7] * 1.2 + gc_torques * 0.02 + c_comp
-            self.robot.set_joint_torques(dict(zip(self.joint_names, joint_torques)))
-            self.prev_joints = new_joints
-            self.rate.sleep()            
-        return self._get_end_effector_pos()
+        
+        self.move_to_pose_ee(action[:3])
+        
+        return self._capture_img(), self._get_end_effector_pos()
 
 
     def _capture_img(self):
+        self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
         start = time.time()
         ret, frame = self.cap.read()
         end = time.time()
@@ -522,15 +393,10 @@ class FrankaPickCubeCartesian(gym.Env):
     def open_gripper(self):
         return self.gripper.open()
     def grasp_object(self):
-        # self.robot_status.enable()
-        return self.gripper.grasp(0, 4, speed=0.1, epsilon_outer=0.1, wait_for_result=True)
+        return self.gripper.grasp(0.04, 8)
 
     def close_gripper(self):
         return self.gripper.close()
-
-    def get_fingertip_width(self):
-        finger_positions = self.gripper.joint_ordered_positions()
-        return finger_positions[0] + finger_positions[1]
 
     def _compute_distance(self, joint_angles):
         robotic_arm_pointer = self._get_end_effector_pos()
@@ -541,14 +407,10 @@ class FrankaPickCubeCartesian(gym.Env):
 
         ee_pose = self.robot.endpoint_pose()
         return ee_pose['position']
-
-    def move_to_pose_ee(self, ref_ee_pos, ref_ee_angle=None, pose_vel_limit=0.2):
+    def move_to_pose_ee(self, ref_ee_pos, pose_vel_limit=0.2):
         counter = 0
         # print('11111', rospy.Time.now())
         
-        if ref_ee_angle is None:
-            ref_ee_angle = np.array(self.euler_from_quaternion(self.reset_ee_quaternion))
-
         while True:
             self.robot_status.enable()
             
@@ -559,8 +421,17 @@ class FrankaPickCubeCartesian(gym.Env):
             action[:3] = ref_ee_pos-self.ee_position
             action[-1] = 1
             
+            #if max(np.abs(action[:3])) < 0.005 or 
+            #print(action)
+            if max(np.abs(action[:3])) < 0.002 or counter > 100:
+                break
+
+            #self.step(action, ignore_safety=True)
+            # limit action
+            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
+
             # calculate joint actions
-            d_angle =  ref_ee_angle - np.array(self.euler_from_quaternion(self.ee_orientation))
+            d_angle =  np.array(self.euler_from_quaternion(self.reset_ee_quaternion)) - np.array(self.euler_from_quaternion(self.ee_orientation))
             for i in range(3):
                 if d_angle[i] < -np.pi:
                     d_angle[i] += 2*np.pi
@@ -568,31 +439,6 @@ class FrankaPickCubeCartesian(gym.Env):
                     d_angle[i] -= 2*np.pi
             d_angle *= 0.5
             #print('d_angle', d_angle)
-
-            #if max(np.abs(action[:3])) < 0.005 or 
-            #print(action)
-            if counter > 290 * 0.04 / self.dt:
-                curr_contr = self.cmi.current_controller
-                # print(curr_contr, self.cmi.is_running(curr_contr))
-                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
-                self.cmi.stop_controller(curr_contr)
-                while self.cmi.is_running(curr_contr):
-                    print('waiting for controller to stop')
-                    time.sleep(1)
-                self.cmi.start_controller(curr_contr)
-                counter = 0
-            if max(np.abs(action[:3])) < 0.002 and max(np.abs(d_angle)) < 0.1:
-                if counter > 300 * 0.04 / self.dt:
-                    print('----------------------------------------------------', counter)
-                for _ in range(5):
-                    self.apply_joint_vel(np.zeros((7,)))
-                    self.rate.sleep()
-                break
-
-            #self.step(action, ignore_safety=True)
-            # limit action
-            pose_action = np.clip(action[:3], -pose_vel_limit, pose_vel_limit)
-
             d_X = np.array([pose_action[0], pose_action[1], pose_action[2], d_angle[0],d_angle[1],d_angle[2]])
             joints_action = self.get_joint_vel_from_pos_vel(d_X)
             # print('joints_action', joints_action)
@@ -600,9 +446,7 @@ class FrankaPickCubeCartesian(gym.Env):
             
             # action cycle time
             self.rate.sleep()
-        for _ in range(5):
-            self.apply_joint_vel(np.zeros((7,)))
-            self.rate.sleep()
+        self.apply_joint_vel(np.zeros((7,)))
 
     def move_to_target_xyz(self, target_xyz):
         obs = self.get_state()
@@ -618,32 +462,7 @@ class FrankaPickCubeCartesian(gym.Env):
         #     self.target_q = q_actual.copy()
         #     self.target_q[0] += .2
         joint_positions = dict(zip(self.joint_names, q))
-        control_frequency, motion_duration = 1 / 0.04, 2
-        # smoothly_move_to_position(self, self.robot, joint_positions, control_frequency=control_frequency, motion_duration=motion_duration)
-        # smoothly_move_to_position_vel(self.robot, self.robot_status, joint_positions, control_frequency=40)
-        self.robot.set_joint_positions(joint_positions)
-        self.log_metrics()
-        self.rate.sleep()
-
-        # restart controller if new joint positions are close to old ones
-        new_joints = self.get_state()['joints']
-        if np.linalg.norm(new_joints - obs['joints']) < 0.0001:
-            self.stale_counter += 1
-            if self.stale_counter > self.max_stale_steps:
-                curr_contr = self.cmi.current_controller
-                # print(curr_contr, self.cmi.is_running(curr_contr))
-                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
-                self.cmi.stop_controller(curr_contr)
-                while self.cmi.is_running(curr_contr):
-                    print('waiting for controller to stop')
-                    time.sleep(1)
-                self.cmi.start_controller(curr_contr)
-
-                self.stale_counter = 0
-                self.logger.pop(int(control_frequency * motion_duration))
-                self.actuation_steps -= int(control_frequency * motion_duration)
-        else:
-            self.stale_counter = 0
+        smoothly_move_to_position(self.robot, joint_positions, control_frequency=1/0.002)
 
         # q = q_actual.copy()
         # q[0] += .01
@@ -655,10 +474,7 @@ class FrankaPickCubeCartesian(gym.Env):
         # jv[6] = .02
         # self.robot.set_joint_velocities(dict(zip(self.joint_names, jv)))
         # self.rate.sleep()
-    
-    def move_to_joint_positions(self, target_joints):
-        joint_positions = dict(zip(self.joint_names, target_joints))
-        smoothly_move_to_position_vel(self.robot, self.robot_status, joint_positions)
+
     
 
 ## TEST REALTIME environment
