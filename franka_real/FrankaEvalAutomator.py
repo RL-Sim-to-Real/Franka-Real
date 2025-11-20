@@ -77,7 +77,7 @@ class FrankaEvalAutomator:
         # print(f'aspect_trace: {self.aspect_trace:.3f}')
         is_square = 1.0 if self.aspect_trace >= 0.8 else 0.0
 
-        # # Draw contour, centroid, and rect's angle on the color image for visualization
+        # Draw contour, centroid, and rect's angle on the color image for visualization
         # cv2.drawContours(color_image, [c], -1, (0, 255, 0), 2)
         # cv2.circle(color_image, (cx, cy), 5, (255, 0, 0), -1)
         # box = cv2.boxPoints(rect)

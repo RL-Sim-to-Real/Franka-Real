@@ -58,7 +58,7 @@ quat = rotation.as_quat()
 
 EE_ORI = quaternion.quaternion(quat[3], quat[0], quat[1], quat[2])
 
-class FrankaPickCubeCartesian(gym.Env):
+class FrankaPushCube(gym.Env):
     """
     Gym env for the real franka robot. Set up to perform the placement of a peg that starts in the robots hand into a slot
     """
@@ -221,7 +221,7 @@ class FrankaPickCubeCartesian(gym.Env):
 
         # smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
         # print("here", self.robot.endpoint_pose()["orientation"])
-        self.move_to_pose_ee(np.array([0.57, 0.0, 0.2]))
+        self.move_to_pose_ee(np.array([0.57, 0.0, 0.1]))
         # self.move_to_pose_ee(np.array([0.655, 0.0, 0.2]))
 
         # stop the robot
@@ -298,7 +298,7 @@ class FrankaPickCubeCartesian(gym.Env):
             'last_action': self.prev_action,
             'joints': np.array(joint_angles),
             'joint_vels': np.array(joint_velocitys),
-            'height': np.array([ee_height]),
+            'height': np.array([ee_height])
         }
         # print('orientation',ee_pose['orientation'])
         self.ee_position = ee_pose['position']
@@ -419,7 +419,7 @@ class FrankaPickCubeCartesian(gym.Env):
                         self.actuation_steps -= self.max_stale_steps
                 else:
                     self.stale_counter = 0
-            scaled_action = action[:7] * 0.2
+            scaled_action = action[:7] * 0.15
             self.apply_joint_vel(scaled_action)
             self.prev_joints = new_joints
             self.log_metrics()

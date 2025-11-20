@@ -185,13 +185,7 @@ def calculate_T_ee_camera():
         return
 
     # Compute relative motions
-    robot_motions = relative_motion(T_base_ee)       # base->ee
-    camera_motions = relative_motion(T_camera_board) # camera->board
 
-    # R_gripper2base = [m[:3,:3] for m in robot_motions]
-    # t_gripper2base = [m[:3,3] for m in robot_motions]
-    # R_target2cam  = [m[:3,:3] for m in camera_motions]
-    # t_target2cam  = [m[:3,3] for m in camera_motions]
 
     R_gripper2base = [m[:3,:3] for m in T_base_ee]
     t_gripper2base = [m[:3,3] for m in T_base_ee]
