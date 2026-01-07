@@ -148,31 +148,6 @@ class FrankaPushCube(gym.Env):
         self.max_stale_steps = 300
         self.logger = MetricLogger()
 
-        ## configure camera
-
-        # device = f"/dev/video{camera_index}"
-
-        # controls = {
-        #     "brightness": -15,
-        #     "contrast": 14,
-        #     "saturation": 100,
-        #     "white_balance_temperature_auto": 1,
-        #     "gamma": 115,
-        #     "power_line_frequency": 2,
-        #     "sharpness": 2,
-        #     "backlight_compensation": 1,
-        #     "exposure_auto": 1,
-        #     "exposure_absolute": 1694,
-        #     "focus_absolute": 169,
-        #     "focus_auto": 0,
-        # }
-
-        # for key, value in controls.items():
-        #     subprocess.run(["v4l2-ctl", "-d", device, "--set-ctrl", f"{key}={value}"])
-        
-        # self.cap = cv2.VideoCapture(camera_index)
-        # self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set the framerate to 30 FPS
-
 
     def _reset_stats(self):
         self.reward_sum = 0.0
@@ -210,9 +185,8 @@ class FrankaPushCube(gym.Env):
         self.robot_status.enable()
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
-        # close the gripper
-        # self.close_gripper()
-        self.open_gripper()
+
+ 
         self._reset_stats()
 
         self.reset_ee_quaternion = [0,-1.,0,0]
@@ -221,8 +195,18 @@ class FrankaPushCube(gym.Env):
 
         # smoothly_move_to_position_vel(self.robot, self.robot_status, target_pose, MAX_JOINT_VELs=1.3)
         # print("here", self.robot.endpoint_pose()["orientation"])
-        self.move_to_pose_ee(np.array([0.57, 0.0, 0.1]))
-        # self.move_to_pose_ee(np.array([0.655, 0.0, 0.2]))
+        # self.move_to_pose_ee(np.array([0.57, 0.0, 0.1]))
+
+        obs = self.get_state()
+        new_ee_mat = np.identity(4)
+        # new_ee_mat[:3, :3] = self.ee_ori_mat
+        new_ee_mat[:3, :3] = self.matrix_from_quaternion(self.ee_orientation)
+        new_ee_mat[:3, 3] = np.array([0.55, 0.0, 0.2])
+        q7 = obs['joints'][6]
+        q_actual = obs['joints']
+        q = franka_analytic_ik(new_ee_mat, q7, q_actual) # this is closer to sim
+        self.move_to_joint_positions(q)
+
 
         # stop the robot
         self.apply_joint_vel(np.zeros((7,)))
@@ -241,8 +225,7 @@ class FrankaPushCube(gym.Env):
         self.prev_joint_accels = 0.0
 
         self._reset_stats()
-    
-        
+
         return self._get_end_effector_pos(), {}
 
 
@@ -257,7 +240,7 @@ class FrankaPushCube(gym.Env):
         yaw is rotation around z in radians (counterclockwise)
         """
         w,x,y,z = q        
-        t0 = +2.0 * (w * x + y * z)
+        t0 = +2.0 * (w * x + y * z) 
         t1 = +1.0 - 2.0 * (x * x + y * y)
         roll_x = math.atan2(t0, t1)
      
@@ -298,7 +281,8 @@ class FrankaPushCube(gym.Env):
             'last_action': self.prev_action,
             'joints': np.array(joint_angles),
             'joint_vels': np.array(joint_velocitys),
-            'height': np.array([ee_height])
+            'height': np.array([ee_height]),
+            'ee_position': np.array(ee_pose['position']),
         }
         # print('orientation',ee_pose['orientation'])
         self.ee_position = ee_pose['position']
@@ -339,8 +323,6 @@ class FrankaPushCube(gym.Env):
         joint_jerks = (joint_accels - self.prev_joint_accels) / dt
         self.logger.log({
             't': self.actuation_steps,
-            'success': False,
-            'grasped': self.grasped,
             'has_collided': self.robot.has_collided(),
             'joint_jerks': np.linalg.norm(joint_jerks),
             'proprioception': np.concatenate([obs['joints'], obs['joint_vels']], axis=0).astype(np.float32),
@@ -356,14 +338,15 @@ class FrankaPushCube(gym.Env):
         self.cur_step += 1
         self.robot_status.enable()
         action_scale = 0.05
-        if control_mode == 'cartesian_position':
-            ee_pos = self._get_end_effector_pos()
-            target_xyz = 0.01 * action[:3] + ee_pos
-            target_xyz = np.array([target_xyz[0], \
-                                    np.clip(target_xyz[1], 1.4, 0.4), \
-                                    np.clip(target_xyz[2], 0.035, 0.2)]) # for safety
-            print(f"Target position: {target_xyz}, Current position: {ee_pos}")
-            self.move_to_target_xyz(target_xyz) # analytic ik
+        if control_mode == 'cartesian_position' or control_mode == 'cartesian_velocity':
+            # ee_pos = self._get_end_effector_pos()
+            # target_xyz = 0.01 * action[:3] + ee_pos
+            # target_xyz = np.array([target_xyz[0], \
+            #                         np.clip(target_xyz[1], -0.4, 0.4), \
+            #                         np.clip(target_xyz[2], 0.035, 0.2)]) # for safety
+            # print(f"Target position: {target_xyz}, Current position: {ee_pos}")
+            # self.move_to_target_xyz(target_xyz) # analytic ik
+            self.move_tip_orient(action)
             
 
             # self.move_to_pose_ee(target_xyz) # ReLoD's ik
@@ -419,7 +402,7 @@ class FrankaPushCube(gym.Env):
                         self.actuation_steps -= self.max_stale_steps
                 else:
                     self.stale_counter = 0
-            scaled_action = action[:7] * 0.15
+            scaled_action = action[:7] * 0.3
             self.apply_joint_vel(scaled_action)
             self.prev_joints = new_joints
             self.log_metrics()
@@ -664,12 +647,170 @@ class FrankaPushCube(gym.Env):
         # q[0] += .01
         # print('q: ', type(q), q)
         joint_positions = dict(zip(self.joint_names, q))
-        # print(q - q_actual, q_actual)
-        # self.robot.set_joint_positions(joint_positions)
-        # jv = np.zeros(7)
-        # jv[6] = .02
-        # self.robot.set_joint_velocities(dict(zip(self.joint_names, jv)))
-        # self.rate.sleep()
+
+    def _skew(self, w: np.ndarray) -> np.ndarray:
+        wx, wy, wz = float(w[0]), float(w[1]), float(w[2])
+        return np.array([
+            [0.0, -wz,  wy],
+            [wz,  0.0, -wx],
+            [-wy, wx,  0.0],
+        ], dtype=np.float64)
+
+    def _so3_exp(self, w: np.ndarray) -> np.ndarray:
+        """SO(3) exponential map for rotation vector w (axis*angle)."""
+        w = np.asarray(w, dtype=np.float64).reshape(3)
+        theta2 = float(w @ w)
+        theta = float(np.sqrt(theta2 + 1e-12))
+        K = self._skew(w)
+        I = np.eye(3, dtype=np.float64)
+
+        if theta < 1e-6:
+            # series expansion
+            A = 1.0 - theta2 / 6.0 + (theta2 * theta2) / 120.0
+            B = 0.5 - theta2 / 24.0 + (theta2 * theta2) / 720.0
+        else:
+            A = np.sin(theta) / theta
+            B = (1.0 - np.cos(theta)) / (theta2 + 1e-12)
+
+        return I + A * K + B * (K @ K)
+
+    def _clip_facing_down(self, Rmat: np.ndarray, max_tilt_rad: float = 0.35) -> np.ndarray:
+        """
+        Clamp tool +Z axis to be within max_tilt of world down [0,0,-1],
+        preserving yaw/twist as much as possible (same idea as sim).
+        """
+        Rmat = np.asarray(Rmat, dtype=np.float64).reshape(3, 3)
+        down = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+
+        z = Rmat[:, 2]
+        z = z / (np.linalg.norm(z) + 1e-12)
+        c = float(np.clip(z @ down, -1.0, 1.0))
+        tilt = float(np.arccos(c))
+
+        if tilt <= max_tilt_rad:
+            return Rmat
+
+        v = z - (z @ down) * down
+        v_norm = np.linalg.norm(v) + 1e-12
+        v_hat = v / v_norm
+
+        z_clamped = np.cos(max_tilt_rad) * down + np.sin(max_tilt_rad) * v_hat
+        z_clamped = z_clamped / (np.linalg.norm(z_clamped) + 1e-12)
+
+        x = Rmat[:, 0]
+        x = x - (x @ z_clamped) * z_clamped
+        x_hat = x / (np.linalg.norm(x) + 1e-12)
+
+        y_hat = np.cross(z_clamped, x_hat)
+        y_hat = y_hat / (np.linalg.norm(y_hat) + 1e-12)
+
+        # recompute x for orthonormality
+        x_hat = np.cross(y_hat, z_clamped)
+        return np.stack([x_hat, y_hat, z_clamped], axis=1)
+
+    def move_tip_orient(self, action: np.ndarray):
+        """
+        Real-robot analog of sim _move_tip_orient.
+
+        action (8,):
+          [dx, dy, dz, drot_x, drot_y, drot_z, q7_action, gripper]
+        Notes:
+          - We ignore gripper here (handle gripper separately as you do now)
+          - We apply drot in BODY frame: R_des = R_cur @ exp(drot)
+          - We optionally use action[6] to bias q7 (like sim), but analytic IK already
+            uses q7 seed; we pass current q7 and current q as seed.
+        """
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+        assert action.shape[0] >= 7, "Expected at least 7D action for tip+rot (+optional q7)."
+
+        obs = self.get_state()
+        ee_pose = self.robot.endpoint_pose()
+
+        # Current EE position/orientation
+        p_cur = np.asarray(ee_pose["position"], dtype=np.float64).reshape(3)
+        R_cur = self.matrix_from_quaternion(self.ee_orientation).astype(np.float64)
+
+        # --- Position increment (match sim scale idea) ---
+        # In sim: scaled_pos = action[:3] * action_scale (default 0.005)
+        # pos_scale = 0.01  #  for velocity
+        pos_scale = 0.02  # for position
+        
+        p_des = p_cur + action[:3] * pos_scale
+
+        # Safety clamps (match your cartesian_position constraints)
+        p_des[0] = np.clip(p_des[0], 0.4, 0.77)
+        p_des[1] = np.clip(p_des[1], -0.32, 0.32)
+        p_des[2] = np.clip(p_des[2], 0.02, 0.50)
+
+        # --- Rotation increment (match sim) ---
+        rot_scale = pos_scale
+        max_rot_step = 0.10   # cap on ||drot||
+        drot = action[3:6] * rot_scale
+        n = float(np.linalg.norm(drot) + 1e-12)
+        if n > max_rot_step:
+            drot = drot * (max_rot_step / n)
+
+        dR = self._so3_exp(drot)
+        R_des = R_cur @ dR
+        R_des = self._clip_facing_down(R_des, max_tilt_rad=0.35)
+
+        # --- Build target pose matrix for IK ---
+        T_des = np.eye(4, dtype=np.float64)
+        T_des[:3, :3] = R_des
+        T_des[:3, 3] = p_des
+
+        # --- IK ---
+        q_actual = obs["joints"].astype(np.float64)
+        q7 = float(q_actual[6])
+        q7_scale = pos_scale
+        q7_min, q7_max =  (-2.9, 2.9)  # set from your model
+        q7_des = np.clip(q7 + action[6] * q7_scale, q7_min, q7_max)
+
+        q = franka_analytic_ik(T_des, q7_des, q_actual)
+
+        # If IK fails, it usually returns NaNs; guard for safety
+        if q is None or np.any(np.isnan(q)):
+            # fall back: do nothing
+            self.apply_joint_vel(np.zeros((7,), dtype=np.float64))
+            self.rate.sleep()
+            return
+        if self.control_mode == 'cartesian_velocity':
+            # Directly apply joint velocities
+            q_current = obs['joints'].astype(np.float64)
+            q_vels = (q - q_current) / self.dt
+            # max_joint_vel = 1.0  # rad/s
+            # q_vels = np.clip(q_vels, -max_joint_vel, max_joint_vel)
+            self.apply_joint_vel(q_vels)
+            self.log_metrics()
+            self.rate.sleep()
+        elif self.control_mode == 'cartesian_position':
+            # Command joint targets (position servo)
+            # print("4th joint target:", q[1])
+            # print("Current 4th joint:", obs['joints'][1])
+            self.robot.set_joint_positions_velocities(q, np.zeros((7,)))
+            # self.robot.set_joint_positions(dict(zip(self.joint_names, q)))
+            self.log_metrics()
+            self.rate.sleep()
+
+        control_frequency, motion_duration = 1 / 0.04, 2
+        new_joints = self.get_state()['joints']
+        if np.linalg.norm(new_joints - obs['joints']) < 0.0001:
+            self.stale_counter += 1
+            if self.stale_counter > self.max_stale_steps:
+                curr_contr = self.cmi.current_controller
+                # print(curr_contr, self.cmi.is_running(curr_contr))
+                print('------------------------------------------------------ stale controller, restarting ', curr_contr)
+                self.cmi.stop_controller(curr_contr)
+                while self.cmi.is_running(curr_contr):
+                    print('waiting for controller to stop')
+                    time.sleep(1)
+                self.cmi.start_controller(curr_contr)
+
+                self.stale_counter = 0
+                self.logger.pop(int(control_frequency * motion_duration))
+                self.actuation_steps -= int(control_frequency * motion_duration)
+        else:
+            self.stale_counter = 0
     
     def move_to_joint_positions(self, target_joints):
         joint_positions = dict(zip(self.joint_names, target_joints))
@@ -678,7 +819,7 @@ class FrankaPushCube(gym.Env):
 
 ## TEST REALTIME environment
 if __name__ == "__main__":
-    env = FrankaPickCubeCartesian(camera_index=0)
+    env = FrankaPushCube(camera_index=0)
     env.reset()
     while True:
         y = np.random.uniform(-0.2, 0.2)
