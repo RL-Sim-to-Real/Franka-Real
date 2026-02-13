@@ -145,7 +145,7 @@ class FrankaPushCube(gym.Env):
 
     
         self.stale_counter = 0
-        self.max_stale_steps = 300
+        self.max_stale_steps = 100
         self.logger = MetricLogger()
 
 
@@ -201,7 +201,7 @@ class FrankaPushCube(gym.Env):
         new_ee_mat = np.identity(4)
         # new_ee_mat[:3, :3] = self.ee_ori_mat
         new_ee_mat[:3, :3] = self.matrix_from_quaternion(self.ee_orientation)
-        new_ee_mat[:3, 3] = np.array([0.55, 0.0, 0.2])
+        new_ee_mat[:3, 3] = np.array([0.57, 0.0, 0.2])
         q7 = obs['joints'][6]
         q_actual = obs['joints']
         q = franka_analytic_ik(new_ee_mat, q7, q_actual) # this is closer to sim
@@ -402,7 +402,7 @@ class FrankaPushCube(gym.Env):
                         self.actuation_steps -= self.max_stale_steps
                 else:
                     self.stale_counter = 0
-            scaled_action = action[:7] * 0.3
+            scaled_action = action[:7] * 0.15
             self.apply_joint_vel(scaled_action)
             self.prev_joints = new_joints
             self.log_metrics()
@@ -733,12 +733,16 @@ class FrankaPushCube(gym.Env):
         # --- Position increment (match sim scale idea) ---
         # In sim: scaled_pos = action[:3] * action_scale (default 0.005)
         # pos_scale = 0.01  #  for velocity
-        pos_scale = 0.02  # for position
+        if self.control_mode == 'cartesian_position':
+            pos_scale = 0.02  # for position
+        elif self.control_mode == 'cartesian_velocity':
+            pos_scale = 0.01
+        # pos_scale = 0.02  # for position
         
         p_des = p_cur + action[:3] * pos_scale
 
         # Safety clamps (match your cartesian_position constraints)
-        p_des[0] = np.clip(p_des[0], 0.4, 0.77)
+        p_des[0] = np.clip(p_des[0], 0.3, 0.77)
         p_des[1] = np.clip(p_des[1], -0.32, 0.32)
         p_des[2] = np.clip(p_des[2], 0.02, 0.50)
 
@@ -778,6 +782,7 @@ class FrankaPushCube(gym.Env):
             # Directly apply joint velocities
             q_current = obs['joints'].astype(np.float64)
             q_vels = (q - q_current) / self.dt
+            print("Joint velocities command:", q_vels)
             # max_joint_vel = 1.0  # rad/s
             # q_vels = np.clip(q_vels, -max_joint_vel, max_joint_vel)
             self.apply_joint_vel(q_vels)

@@ -379,7 +379,7 @@ class FrankaPickCubeCartesian(gym.Env):
             # self.move_to_pose_ee(target_xyz) # ReLoD's ik
         elif control_mode == 'joint_position':
             joint_positions = self.get_state()['joints']
-            target_joints = joint_positions + action[:7] * 0.05
+            target_joints = joint_positions + action[:7] * 0.06
             # target_joints = dict(zip(self.joint_names, target_joints))
             t0 = time.time()
             control_frequency, motion_duration = 2 / 0.04, 2
@@ -401,7 +401,7 @@ class FrankaPickCubeCartesian(gym.Env):
                     while self.cmi.is_running(curr_contr):
                         print('waiting for controller to stop')
                         time.sleep(1)
-                    self.cmi.start_contreller(curr_contr)
+                    self.cmi.start_controller(curr_contr)
                     self.stale_counter = 0
                     self.logger.pop(int(control_frequency * motion_duration))
                     # self.actuation_steps -= int(control_frequency * motion_duration)
@@ -429,7 +429,7 @@ class FrankaPickCubeCartesian(gym.Env):
                         self.actuation_steps -= self.max_stale_steps
                 else:
                     self.stale_counter = 0
-            scaled_action = action[:7] * 0.15
+            scaled_action = action[:7] * 0.2
             self.apply_joint_vel(scaled_action)
             self.prev_joints = new_joints
             self.log_metrics()
@@ -758,12 +758,15 @@ class FrankaPickCubeCartesian(gym.Env):
         # --- Position increment (match sim scale idea) ---
         # In sim: scaled_pos = action[:3] * action_scale (default 0.005)
         # pos_scale = 0.01  #  for velocity
-        pos_scale = 0.02  # for position
+        if self.control_mode == 'cartesian_position':
+            pos_scale = 0.02  # for position
+        elif self.control_mode == 'cartesian_velocity':
+            pos_scale = 0.01
         
         p_des = p_cur + action[:3] * pos_scale
 
         # Safety clamps (match your cartesian_position constraints)
-        p_des[0] = np.clip(p_des[0], 0.4, 0.77)
+        p_des[0] = np.clip(p_des[0], 0.45, 0.77)
         p_des[1] = np.clip(p_des[1], -0.32, 0.32)
         p_des[2] = np.clip(p_des[2], 0.02, 0.50)
 
